@@ -1,0 +1,18 @@
+<?php
+
+declare(strict_types=1);
+
+use Brnshkr\Config\PhpStan;
+use Brnshkr\Config\PhpStan\Rule\NoNamedArgumentsTagRule;
+
+/** @var PhpStan $config */
+$config = include __DIR__ . '/phpstan.dist.php';
+
+return $config
+    // ->setEditor(PhpStan::EDITOR_VSCODE)
+    // ->setEditor(PhpStan::EDITOR_PHPSTORM)
+    ->removeRules(rules: [
+        NoNamedArgumentsTagRule::class,
+    ])
+    ->toArray()
+;

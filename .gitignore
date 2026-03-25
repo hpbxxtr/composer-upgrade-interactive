@@ -1,0 +1,9 @@
+/.idea/
+/.cache/
+/.local/
+/conf/php-cs-fixer.php
+/conf/phpstan.php
+/conf/phpunit.xml
+/conf/rector.php
+/node_modules/
+/vendor/
