@@ -1,0 +1,47 @@
+name: Security
+
+on:
+  push:
+    branches:
+      - 'dev/**'
+  pull_request:
+  schedule:
+    - cron: '0 5 * * 1'   # Mondays 05:00 UTC
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  security-events: write   # required by CodeQL to upload SARIF results
+
+jobs:
+  # ─── Dependency Review ───────────────────────────────────────────────────────
+  # Fails a PR if any added or changed dependency has a known CVE.
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@v4
+
+  # ─── CodeQL ──────────────────────────────────────────────────────────────────
+  # Semantic security analysis for PHP (injection, path traversal, etc.).
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: php
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3

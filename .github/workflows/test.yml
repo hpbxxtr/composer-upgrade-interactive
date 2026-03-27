@@ -39,6 +39,9 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist
 
+      - name: Security audit
+        run: composer audit --no-interaction
+
       - name: Run tests
         run: vendor/bin/pest ${{ matrix.coverage && '--coverage --coverage-clover coverage.xml' || '--no-coverage' }}
         env:
