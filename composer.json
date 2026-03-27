@@ -14,7 +14,7 @@
     "pestphp/pest": "4.4.2",
     "pestphp/pest-plugin-arch": "4.0.0",
     "mockery/mockery": "1.6.12",
-    "phpstan/phpstan": "2.1.42",
+    "phpstan/phpstan": "2.1.44",
     "friendsofphp/php-cs-fixer": "3.94.2",
     "kubawerlos/php-cs-fixer-custom-fixers": "3.36.1",
     "phpstan/extension-installer": "1.4.3",
