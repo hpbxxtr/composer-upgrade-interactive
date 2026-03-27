@@ -1,0 +1,13 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - 'dev/**'
+  pull_request:
+
+jobs:
+  test:
+    uses: ./.github/workflows/_test.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

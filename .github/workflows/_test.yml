@@ -1,0 +1,72 @@
+name: Test (reusable)
+
+on:
+  workflow_call:
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  test:
+    name: Test / PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.3', '8.4', '8.5']
+        include:
+          # Coverage and linting (style + rector) only need to run once.
+          # PHPStan runs on all versions to catch version-specific type issues.
+          - php: '8.3'
+            coverage: true
+            lint: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: ${{ matrix.coverage && 'pcov' || 'none' }}
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Security audit
+        run: composer audit --no-interaction
+
+      - name: Run tests
+        run: vendor/bin/pest ${{ matrix.coverage && '--coverage --coverage-clover coverage.xml' || '--no-coverage' }}
+        env:
+          PROMPT_FALLBACK: '1'
+
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v6
+        with:
+          files: coverage.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Static analysis
+        run: |
+          cp -f conf/phpstan.php.example conf/phpstan.php
+          vendor/bin/phpstan analyse --no-progress -c conf/phpstan.php
+
+      - name: Code style
+        if: matrix.lint
+        run: |
+          cp -f conf/php-cs-fixer.php.example conf/php-cs-fixer.php
+          vendor/bin/php-cs-fixer fix --dry-run --diff --no-interaction --config conf/php-cs-fixer.php
+
+      - name: Rector
+        if: matrix.lint
+        run: |
+          cp -f conf/rector.php.example conf/rector.php
+          vendor/bin/rector process --dry-run --config conf/rector.php
