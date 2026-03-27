@@ -112,25 +112,25 @@ jobs:
         uses: orhun/git-cliff-action@v4
         with:
           config: cliff.toml
-          args: --unreleased --tag ${{ needs.ci.outputs.tag }}
+          args: --unreleased --tag ${{ needs.test.outputs.tag }}
         env:
           OUTPUT: CHANGELOG_RELEASE.md
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Create and push release tag
         run: |
-          TAG="${{ needs.ci.outputs.tag }}"
+          TAG="${{ needs.test.outputs.tag }}"
           git tag -a "$TAG" -m "Release $TAG"
           git push origin "$TAG"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name:   ${{ needs.ci.outputs.tag }}
-          name:       ${{ needs.ci.outputs.tag }}
+          tag_name:   ${{ needs.test.outputs.tag }}
+          name:       ${{ needs.test.outputs.tag }}
           body_path:  CHANGELOG_RELEASE.md
           draft:      false
-          prerelease: ${{ contains(needs.ci.outputs.version, '-') }}
+          prerelease: ${{ contains(needs.test.outputs.version, '-') }}
 
       - name: Notify Packagist
         if: ${{ env.PACKAGIST_TOKEN != '' }}
