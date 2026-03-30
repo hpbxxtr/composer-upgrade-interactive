@@ -5,14 +5,17 @@ declare(strict_types=1);
 namespace Hpbxxtr\UpgradeInteractive\Command;
 
 use Composer\Command\BaseCommand;
+use Composer\Util\ProcessExecutor;
+use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
+use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUIInterface;
-use Composer\Util\ProcessExecutor;
 use Override;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
@@ -23,6 +26,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
     public function __construct(
         private readonly ?PackageResolverInterface $packageResolver = null,
         private readonly ?InteractiveUIInterface $interactiveUI = null,
+        private readonly ?UpgradeExecutorInterface $upgradeExecutor = null,
     ) {
         parent::__construct();
     }
@@ -33,6 +37,12 @@ final class UpgradeInteractiveCommand extends BaseCommand
         $this->setName('hpbxxtr:upgrade-interactive')
             ->setAliases(['h:ui', 'upgrade-interactive'])
             ->setDescription('Interactively select and upgrade outdated dependencies')
+            ->addOption(
+                name: 'caret',
+                shortcut: null,
+                mode: InputOption::VALUE_NONE,
+                description: 'Use caret (^) version range instead of exact version (e.g. ^1.2.3 instead of 1.2.3)',
+            )
         ;
     }
 
@@ -77,9 +87,14 @@ final class UpgradeInteractiveCommand extends BaseCommand
             return 0;
         }
 
+        // getOption() returns mixed; !== false produces bool, isolating the mixed expression
+        // from the executor try block so it doesn't contaminate type coverage there.
+        $isCaret = $input->getOption('caret') !== false;
+
         try {
-            $upgradeExecutor = new UpgradeExecutor($this->requireComposer(), $io);
-            $upgradeExecutor->execute($selections);
+            $constraintType  = $isCaret ? ConstraintType::Caret : ConstraintType::Exact;
+            $upgradeExecutor = $this->upgradeExecutor ?? new UpgradeExecutor($this->requireComposer(), $io);
+            $upgradeExecutor->execute($selections, $constraintType);
         } catch (\Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
 

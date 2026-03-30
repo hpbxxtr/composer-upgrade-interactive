@@ -23,7 +23,7 @@ use const PHP_EOL;
 /**
  * @internal Hpbxxtr\UpgradeInteractive
  */
-final readonly class UpgradeExecutor
+final readonly class UpgradeExecutor implements UpgradeExecutorInterface
 {
     public function __construct(
         private Composer $composer,
@@ -36,7 +36,8 @@ final readonly class UpgradeExecutor
      *
      * @throws \Exception
      */
-    public function execute(array $selections): void
+    #[\Override]
+    public function execute(array $selections, ConstraintType $constraintType = ConstraintType::Exact): void
     {
         $count = count($selections);
         $this->io->write(PHP_EOL . sprintf('<info>Updating %d package(s)…</info>', $count) . PHP_EOL);
@@ -69,8 +70,9 @@ final readonly class UpgradeExecutor
                 $this->io->write(sprintf('  <comment>→</comment> <info>%s</info>', $name));
             }
 
+            $prefix   = $constraintType === ConstraintType::Caret ? '^' : '';
             $packages = array_map(
-                static fn (string $name, string $ver): string => $name . ':' . Str::trimStart($ver, 'v'),
+                static fn (string $name, string $ver): string => $name . ':' . $prefix . Str::trimStart($ver, 'v'),
                 array_keys($group),
                 array_values($group),
             );
