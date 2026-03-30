@@ -68,10 +68,10 @@ final readonly class PackageResolver implements PackageResolverInterface
         $minorMap = $this->parseOutdatedMap($minorJson);
         $majorMap = $this->parseOutdatedMap($majorJson);
 
-        // array_keys of merged associative maps gives unique names without a separate array_unique pass
-        $names = array_keys($patchMap + $minorMap + $majorMap);
+        // Merge all three maps; + keeps the first occurrence of each key and gives unique names.
+        $merged = $patchMap + $minorMap + $majorMap;
 
-        if ($names === []) {
+        if ($merged === []) {
             return [];
         }
 
@@ -79,13 +79,7 @@ final readonly class PackageResolver implements PackageResolverInterface
         $metaMap = $this->parseMetaMap($showJson, $devSet);
         $entries = [];
 
-        foreach ($names as $name) {
-            $ref = $patchMap[$name] ?? $minorMap[$name] ?? $majorMap[$name] ?? null;
-
-            if ($ref === null) {
-                continue; // logically unreachable: $names comes from array_keys of the merged maps
-            }
-
+        foreach ($merged as $name => $ref) {
             $currentRaw = $ref['version'];
 
             $patchTarget = (isset($patchMap[$name]) && $patchMap[$name]['latest-status'] !== 'up-to-date')
