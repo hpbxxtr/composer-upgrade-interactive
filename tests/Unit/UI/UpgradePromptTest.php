@@ -267,6 +267,33 @@ afterEach(function (): void {
     \expect($prompt->value())->toBe([]);
 });
 
+// ---------------------------------------------------------------------------
+// Guards for out-of-bounds property values
+// ---------------------------------------------------------------------------
+
+\it('toggleSelection is a no-op when activeRow is out of bounds', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt           = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->activeRow = 999; // one past any valid index
+
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('toggleSelection is a no-op when activeCol resolves to a negative index', function (): void {
+    // activeCol = -1 → min(-1, count-1) = -1 → $bumps[-1] is undefined → col === null
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt           = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->activeCol = -1;
+
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
 \it('DOWN resets active column to 0', function (): void {
     Prompt::fake([Key::RIGHT_ARROW, Key::DOWN_ARROW, "\n"]);
 
