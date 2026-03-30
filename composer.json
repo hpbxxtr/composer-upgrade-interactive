@@ -6,7 +6,7 @@
   "require": {
     "php": "^8.3",
     "composer-plugin-api": "^2.0",
-    "laravel/prompts": ">=0.3.16"
+    "laravel/prompts": "^0.3.16"
   },
   "require-dev": {
     "brnshkr/config": "dev-php83",
@@ -17,7 +17,7 @@
     "pestphp/pest": "4.4.3",
     "pestphp/pest-plugin-arch": "4.0.0",
     "phpstan/extension-installer": "1.4.3",
-    "phpstan/phpstan": "2.1.44",
+    "phpstan/phpstan": "2.1.45",
     "phpstan/phpstan-deprecation-rules": "2.0.4",
     "phpstan/phpstan-doctrine": "2.0.20",
     "phpstan/phpstan-phpunit": "2.0.16",
