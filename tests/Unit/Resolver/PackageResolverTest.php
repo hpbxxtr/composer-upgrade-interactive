@@ -399,6 +399,43 @@ function showJson(array $installed): string
 });
 
 // ---------------------------------------------------------------------------
+// Empty-string output guards
+// ---------------------------------------------------------------------------
+
+\it('treats empty-string outdated output as no packages for that bump level', function (): void {
+    $processExecutor = \mockProcessExecutor([
+        'patch' => '',
+        'minor' => \outdatedJson([
+            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
+        ]),
+        'major' => \outdatedJson([]),
+        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
+    ]);
+
+    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+
+    \expect($packages)->toHaveCount(1);
+    \expect($packages[0]->patch)->toBeNull();
+    \expect($packages[0]->minor?->version)->toBe('1.1.0');
+});
+
+\it('treats empty-string show output as missing meta (empty repoUrl)', function (): void {
+    $processExecutor = \mockProcessExecutor([
+        'patch' => \outdatedJson([
+            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
+        ]),
+        'minor' => \outdatedJson([]),
+        'major' => \outdatedJson([]),
+        'show'  => '',
+    ]);
+
+    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+
+    \expect($packages)->toHaveCount(1);
+    \expect($packages[0]->repoUrl)->toBe('');
+});
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
@@ -412,6 +449,17 @@ function showJson(array $installed): string
 
     \expect(static fn (): array => (new PackageResolver(\mockComposerForResolver(), $mock))->resolve())
         ->toThrow(\RuntimeException::class, 'connection refused')
+    ;
+});
+
+\it('throws RuntimeException when a promise rejects', function (): void {
+    $mock = \Mockery::mock(ProcessExecutor::class);
+    $mock->shouldReceive('executeAsync')
+        ->andReturnUsing(static fn(): PromiseInterface => \React\Promise\reject(new \RuntimeException('connection lost')))
+    ;
+
+    \expect(static fn (): array => (new PackageResolver(\mockComposerForResolver(), $mock))->resolve())
+        ->toThrow(\RuntimeException::class, 'One or more composer commands failed')
     ;
 });
 
