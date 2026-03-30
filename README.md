@@ -65,12 +65,29 @@ composer require --dev hpbxxtr/composer-upgrade-interactive
 
 ```bash
 composer h:ui
-
 ```
 
-Aliases: `composer hpbxxtr:upgrade-interactive` · `composer upgrade-interactive` 
+Aliases: `composer hpbxxtr:upgrade-interactive` · `composer upgrade-interactive`
 
 Navigate to a package, move across the patch/minor/major columns with the arrow keys, press `space` to select a target version, then `enter` to apply.
+
+### Options
+
+| Option | Description |
+|---|---|
+| `--caret` | Write a caret range constraint (e.g. `^1.2.3`) instead of an exact version (`1.2.3`) |
+
+**Example — pin exact versions (default):**
+```bash
+composer h:ui
+# writes: "vendor/pkg": "1.2.3"
+```
+
+**Example — allow future minor/patch updates:**
+```bash
+composer h:ui --caret
+# writes: "vendor/pkg": "^1.2.3"
+```
 
 ---
 
@@ -92,7 +109,7 @@ Navigate to a package, move across the patch/minor/major columns with the arrow 
 
 1. Runs `composer outdated` in parallel for patch, minor, and major ranges to build a version map.
 2. Renders a table-style multiselect — one row per outdated package, three columns for each bump level.
-3. On confirm, writes updated constraints to `composer.json` then runs `composer update --with-all-dependencies` for all selected packages in one pass.
+3. On confirm, writes updated constraints to `composer.json` (exact version by default, caret range with `--caret`) then runs `composer update --with-all-dependencies` for all selected packages in one pass.
 
 ---
 
