@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
-use Laravel\Prompts\Exceptions\NonInteractiveValidationException;
 use Override;
 
 /**
@@ -21,13 +20,9 @@ final class InteractiveUI implements InteractiveUIInterface
     #[Override]
     public function ask(array $entries): array
     {
-        try {
-            $upgradePrompt = new UpgradePrompt($entries);
-            $upgradePrompt->prompt();
+        $upgradePrompt = new UpgradePrompt($entries);
+        $upgradePrompt->prompt();
 
-            return $upgradePrompt->value();
-        } catch (NonInteractiveValidationException) {
-            return [];
-        }
+        return $upgradePrompt->value();
     }
 }
