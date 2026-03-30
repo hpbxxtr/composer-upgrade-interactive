@@ -6,6 +6,8 @@ use Composer\Console\Application as ComposerApplication;
 use Composer\IO\BufferIO;
 use Composer\IO\ConsoleIO;
 use Hpbxxtr\UpgradeInteractive\Command\UpgradeInteractiveCommand;
+use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
+use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUIInterface;
 use Symfony\Component\Console\Helper\HelperSet;
@@ -29,8 +31,9 @@ use Symfony\Component\Console\Tester\CommandTester;
 function makeCommandTester(
     PackageResolverInterface $packageResolver,
     ?InteractiveUIInterface $interactiveUI = null,
+    ?UpgradeExecutorInterface $upgradeExecutor = null,
 ): array {
-    $command = new UpgradeInteractiveCommand($packageResolver, $interactiveUI);
+    $command = new UpgradeInteractiveCommand($packageResolver, $interactiveUI, $upgradeExecutor);
 
     $app = new ComposerApplication();
     $app->setAutoExit(false);
@@ -51,8 +54,9 @@ function makeCommandTester(
 function makeInteractiveCommandTester(
     PackageResolverInterface $packageResolver,
     ?InteractiveUIInterface $interactiveUI = null,
+    ?UpgradeExecutorInterface $upgradeExecutor = null,
 ): array {
-    $command = new UpgradeInteractiveCommand($packageResolver, $interactiveUI);
+    $command = new UpgradeInteractiveCommand($packageResolver, $interactiveUI, $upgradeExecutor);
 
     $app = new ComposerApplication();
     $app->setAutoExit(false);
@@ -223,6 +227,64 @@ function makeInteractiveCommandTester(
 // ---------------------------------------------------------------------------
 // Abandoned packages
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Executor invocation and --caret flag
+// ---------------------------------------------------------------------------
+
+\it('calls the executor with exact constraint by default', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([\outdatedPackageWithMinor()]);
+
+    $ui = \Mockery::mock(InteractiveUIInterface::class);
+    $ui->shouldReceive('ask')->once()->andReturn(['vendor/pkg' => '1.3.0']);
+
+    $executor = \Mockery::mock(UpgradeExecutorInterface::class);
+    $executor->shouldReceive('execute')
+        ->once()
+        ->withArgs(static fn (array $selections, ConstraintType $constraintType): bool => $constraintType === ConstraintType::Exact)
+    ;
+
+    [$tester] = \makeInteractiveCommandTester($mock, $ui, $executor);
+    $tester->execute([]);
+
+    \expect($tester->getStatusCode())->toBe(0);
+});
+
+\it('calls the executor with caret constraint when --caret is passed', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([\outdatedPackageWithMinor()]);
+
+    $ui = \Mockery::mock(InteractiveUIInterface::class);
+    $ui->shouldReceive('ask')->once()->andReturn(['vendor/pkg' => '1.3.0']);
+
+    $executor = \Mockery::mock(UpgradeExecutorInterface::class);
+    $executor->shouldReceive('execute')
+        ->once()
+        ->withArgs(static fn (array $selections, ConstraintType $constraintType): bool => $constraintType === ConstraintType::Caret)
+    ;
+
+    [$tester] = \makeInteractiveCommandTester($mock, $ui, $executor);
+    $tester->execute(['--caret' => true]);
+
+    \expect($tester->getStatusCode())->toBe(0);
+});
+
+\it('exits 1 when the executor throws', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([\outdatedPackageWithMinor()]);
+
+    $ui = \Mockery::mock(InteractiveUIInterface::class);
+    $ui->shouldReceive('ask')->once()->andReturn(['vendor/pkg' => '1.3.0']);
+
+    $executor = \Mockery::mock(UpgradeExecutorInterface::class);
+    $executor->shouldReceive('execute')->once()->andThrow(new \RuntimeException('install failed'));
+
+    [$tester, , $buffered] = \makeInteractiveCommandTester($mock, $ui, $executor);
+    $tester->execute([]);
+
+    \expect($tester->getStatusCode())->toBe(1);
+});
 
 \it('includes abandoned-only packages (no available update) in the UI call', function (): void {
     $outdatedPackage = \outdatedPackage(

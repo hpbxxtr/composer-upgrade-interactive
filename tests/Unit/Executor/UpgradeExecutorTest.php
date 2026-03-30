@@ -6,6 +6,7 @@ use Composer\Composer;
 use Composer\Console\Application;
 use Composer\IO\IOInterface;
 use Composer\Package\RootPackageInterface;
+use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Symfony\Component\Console\Input\InputInterface;
 
@@ -144,6 +145,55 @@ function makeIO(): IOInterface
 
     $executor = new UpgradeExecutor(\makeComposer(), $io, $application);
     $executor->execute(['vendor/pkg' => '1.3.0']);
+});
+
+// ---------------------------------------------------------------------------
+// Constraint type
+// ---------------------------------------------------------------------------
+
+\it('uses an exact version constraint by default', function (): void {
+    $application = \makeApp();
+
+    $application->shouldReceive('run')
+        ->once()
+        ->withArgs(static fn (InputInterface $input): bool => str_contains((string) $input, 'vendor/pkg:1.3.0'))
+        ->andReturn(0)
+    ;
+    $application->shouldReceive('run')->once()->andReturn(0); // update call
+    $application->shouldReceive('resetComposer');
+
+    $executor = new UpgradeExecutor(\makeComposer(), \makeIO(), $application);
+    $executor->execute(['vendor/pkg' => '1.3.0'], ConstraintType::Exact);
+});
+
+\it('prefixes the version with ^ when caret constraint type is requested', function (): void {
+    $application = \makeApp();
+
+    $application->shouldReceive('run')
+        ->once()
+        ->withArgs(static fn (InputInterface $input): bool => str_contains((string) $input, 'vendor/pkg:^1.3.0'))
+        ->andReturn(0)
+    ;
+    $application->shouldReceive('run')->once()->andReturn(0); // update call
+    $application->shouldReceive('resetComposer');
+
+    $executor = new UpgradeExecutor(\makeComposer(), \makeIO(), $application);
+    $executor->execute(['vendor/pkg' => '1.3.0'], ConstraintType::Caret);
+});
+
+\it('strips leading v before adding the caret prefix', function (): void {
+    $application = \makeApp();
+
+    $application->shouldReceive('run')
+        ->once()
+        ->withArgs(static fn (InputInterface $input): bool => str_contains((string) $input, 'vendor/pkg:^1.3.0'))
+        ->andReturn(0)
+    ;
+    $application->shouldReceive('run')->once()->andReturn(0); // update call
+    $application->shouldReceive('resetComposer');
+
+    $executor = new UpgradeExecutor(\makeComposer(), \makeIO(), $application);
+    $executor->execute(['vendor/pkg' => 'v1.3.0'], ConstraintType::Caret);
 });
 
 \it('writes an error when the final update fails', function (): void {
