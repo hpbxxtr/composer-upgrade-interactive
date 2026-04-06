@@ -8,6 +8,10 @@ use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Override;
 
+use function count;
+use function Laravel\Prompts\confirm;
+use function sprintf;
+
 /**
  * @internal Hpbxxtr\UpgradeInteractive
  */
@@ -28,6 +32,19 @@ final readonly class InteractiveUI implements InteractiveUIInterface
         $upgradePrompt = new UpgradePrompt($entries, availableVersionsResolver: $this->availableVersionsResolver);
         $upgradePrompt->prompt();
 
-        return $upgradePrompt->value();
+        $result = $upgradePrompt->value();
+
+        if ($result === []) {
+            return [];
+        }
+
+        $count = count($result);
+
+        $isConfirmed = confirm(
+            label: sprintf('Upgrade %d package%s?', $count, $count !== 1 ? 's' : ''),
+            default: true,
+        );
+
+        return $isConfirmed ? $result : [];
     }
 }
