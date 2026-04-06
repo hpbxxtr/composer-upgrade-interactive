@@ -2,8 +2,10 @@
 
 declare(strict_types=1);
 
+use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 use Hpbxxtr\UpgradeInteractive\UI\UpgradePrompt;
 use Laravel\Prompts\Key;
@@ -25,20 +27,21 @@ afterEach(function (): void {
 });
 
 \it('value() returns the selected package with its raw version', function (): void {
-    $outdatedPackage    = \outdatedPackage('vendor/pkg', '1.2.3', minor: VersionTarget::fromRaw('v1.3.0'));
-    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $versionTarget          = VersionTarget::fromRaw('v1.3.0');
+    $outdatedPackage = \outdatedPackage('vendor/pkg', '1.2.3', minor: $versionTarget);
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
 
-    $prompt->selections['vendor/pkg'] = BumpType::Minor;
+    $prompt->selections['vendor/pkg'] = new VersionSelection(BumpType::Minor, $versionTarget);
 
     \expect($prompt->value())->toBe(['vendor/pkg' => 'v1.3.0']);
 });
 
 \it('value() skips entries whose selection is null', function (): void {
     $outdatedPackage = \outdatedPackageWithMinor('vendor/a', '1.0.0', '1.1.0');
-    $pkgB = \outdatedPackageWithMinor('vendor/b', '2.0.0', '2.1.0');
+    $pkgB            = \outdatedPackageWithMinor('vendor/b', '2.0.0', '2.1.0');
 
-    $prompt                       = new UpgradePrompt([$outdatedPackage, $pkgB]);
-    $prompt->selections['vendor/a'] = BumpType::Minor;
+    $prompt                         = new UpgradePrompt([$outdatedPackage, $pkgB]);
+    $prompt->selections['vendor/a'] = new VersionSelection(BumpType::Minor, VersionTarget::fromRaw('1.1.0'));
     // vendor/b stays null
 
     \expect($prompt->value())->toBe(['vendor/a' => '1.1.0']);
@@ -51,9 +54,9 @@ afterEach(function (): void {
 
     $prompt = new UpgradePrompt([$outdatedPackage, $pkgB, $pkgC]);
 
-    $prompt->selections['vendor/a'] = BumpType::Patch;
-    $prompt->selections['vendor/b'] = BumpType::Minor;
-    $prompt->selections['vendor/c'] = BumpType::Major;
+    $prompt->selections['vendor/a'] = new VersionSelection(BumpType::Patch, VersionTarget::fromRaw('1.2.4'));
+    $prompt->selections['vendor/b'] = new VersionSelection(BumpType::Minor, VersionTarget::fromRaw('1.3.0'));
+    $prompt->selections['vendor/c'] = new VersionSelection(BumpType::Major, VersionTarget::fromRaw('2.0.0'));
 
     \expect($prompt->value())->toBe([
         'vendor/a' => '1.2.4',
@@ -313,3 +316,452 @@ afterEach(function (): void {
 
     \expect($prompt->activeCol)->toBe(0);
 });
+
+// ---------------------------------------------------------------------------
+// Inline picker — opening
+// ---------------------------------------------------------------------------
+
+\it('pressing v without a versionsResolver leaves picker inactive', function (): void {
+    Prompt::fake(['v', "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse();
+});
+
+\it('pressing v on a package with no bumps leaves picker inactive', function (): void {
+    Prompt::fake(['v', "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldNotReceive('resolve');
+
+    $outdatedPackage = \outdatedPackage(name: 'vendor/dead', current: '1.0.0', abandonedBy: 'vendor/new');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse();
+});
+
+\it('pressing v when resolver returns empty versions leaves picker inactive', function (): void {
+    Prompt::fake(['v', "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse();
+});
+
+\it('pressing v opens the picker and sets isPickerActive', function (): void {
+    Prompt::fake(['v', Key::CTRL_C]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1'),
+        VersionTarget::fromRaw('1.3.0'),
+    ]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse() // closed after CTRL+C
+        ->and($prompt->pickerColumns)->toBe([]) // cleared on cancel
+    ;
+});
+
+// ---------------------------------------------------------------------------
+// Inline picker — selecting a version
+// ---------------------------------------------------------------------------
+
+\it('pressing v then space selects the first (latest) version', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.3.1');
+    $v2 = VersionTarget::fromRaw('1.3.0');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v2]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0')], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.1'])
+        ->and($prompt->isPickerActive)->toBeFalse()
+    ;
+});
+
+\it('pressing v, DOWN, space selects the second version', function (): void {
+    Prompt::fake(['v', Key::DOWN_ARROW, Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.3.5');
+    $v2 = VersionTarget::fromRaw('1.3.4');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v2]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.4']);
+});
+
+// ---------------------------------------------------------------------------
+// Inline picker — cancellation and ESC restore
+// ---------------------------------------------------------------------------
+
+\it('pressing ESC cancels the picker without changing selection', function (): void {
+    Prompt::fake(['v', Key::ESCAPE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1'),
+    ]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([])
+        ->and($prompt->isPickerActive)->toBeFalse()
+    ;
+});
+
+\it('pressing ESC restores the previous selection', function (): void {
+    // First SPACE selects the default minor, then v opens picker, then ESC restores
+    Prompt::fake([Key::SPACE, 'v', Key::ESCAPE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1'),
+    ]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // The default selection (space = 1.3.0) should be restored after ESC
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+\it('pressing LEFT in the picker cancels it (same as ESC)', function (): void {
+    Prompt::fake(['v', Key::LEFT_ARROW, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.1')]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([])
+        ->and($prompt->isPickerActive)->toBeFalse()
+    ;
+});
+
+// ---------------------------------------------------------------------------
+// Inline picker — Ctrl+C clears everything
+// ---------------------------------------------------------------------------
+
+\it('Ctrl+C while picker is open clears all selections and submits', function (): void {
+    // SPACE selects, v opens picker, CTRL+C should wipe everything
+    Prompt::fake([Key::SPACE, 'v', Key::CTRL_C]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.1')]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+// ---------------------------------------------------------------------------
+// Inline picker — navigation skips group headers
+// ---------------------------------------------------------------------------
+
+\it('pressing LEFT in picker navigates from latest column to older column', function (): void {
+    Prompt::fake(['v', Key::LEFT_ARROW, Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.4.0');
+    $v13 = VersionTarget::fromRaw('1.3.5');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v13]);
+
+    $pkg = new OutdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.0',
+        currentRaw: '1.2.0',
+        patch: null,
+        minor: VersionTarget::fromRaw('1.4.0'),
+        major: null,
+        isDev: false,
+        repoUrl: '',
+    );
+    $prompt = new UpgradePrompt([$pkg], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // columns = [{1.3.x, [1.3.5]}, {1.4.x, [1.4.0]}], cursor starts at col=1 (1.4.x)
+    // LEFT moves to col=0 (1.3.x), SPACE selects 1.3.5
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.5']);
+});
+
+\it('picker UP does not move cursor past the first selectable row', function (): void {
+    Prompt::fake(['v', Key::UP_ARROW, Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.0')]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+// ---------------------------------------------------------------------------
+// Picker opening guards
+// ---------------------------------------------------------------------------
+
+\it('pressing v with out-of-bounds activeRow leaves picker inactive', function (): void {
+    Prompt::fake(['v', "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldNotReceive('resolve');
+
+    $prompt           = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->activeRow = 999;
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse();
+});
+
+// ---------------------------------------------------------------------------
+// Patch and Major picker via v key
+// ---------------------------------------------------------------------------
+
+\it('pressing v on a patch column opens picker with flat version list', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.2.5');
+    $v2 = VersionTarget::fromRaw('1.2.4');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')
+        ->with('vendor/pkg', '1.2.3', BumpType::Patch)
+        ->once()
+        ->andReturn([$versionTarget, $v2]);
+
+    $pkg = new OutdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.3',
+        currentRaw: '1.2.3',
+        patch: VersionTarget::fromRaw('1.2.5'),
+        minor: null,
+        major: null,
+        isDev: false,
+        repoUrl: '',
+    );
+    $prompt = new UpgradePrompt([$pkg], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // Patch picker is flat (no group headers), selects first item
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.2.5']);
+});
+
+\it('pressing v on a major column opens picker grouped by major series', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('3.0.0');
+    $v2 = VersionTarget::fromRaw('2.1.0');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')
+        ->with('vendor/pkg', '1.2.3', BumpType::Major)
+        ->once()
+        ->andReturn([$versionTarget, $v2]);
+
+    $pkg = new OutdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.3',
+        currentRaw: '1.2.3',
+        patch: null,
+        minor: null,
+        major: VersionTarget::fromRaw('3.0.0'),
+        isDev: false,
+        repoUrl: '',
+    );
+    $prompt = new UpgradePrompt([$pkg], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // Grouped picker: '── 3.x ──', $v3, '── 2.x ──', $v2 — cursor starts at index 1 ($v3)
+    \expect($prompt->value())->toBe(['vendor/pkg' => '3.0.0']);
+});
+
+// ---------------------------------------------------------------------------
+// Unrecognised key in picker mode is ignored
+// ---------------------------------------------------------------------------
+
+\it('pressing an unrecognised key while picker is open is silently ignored', function (): void {
+    Prompt::fake(['v', 'z', Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.1')]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // 'z' is ignored, space selects first version
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.1']);
+});
+
+// ---------------------------------------------------------------------------
+// pickerSelect guard — cursor on non-VersionTarget row
+// ---------------------------------------------------------------------------
+
+\it('pickerSelect is a no-op when cursor lands on a group header string', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.5')]);
+
+    $pkg = new OutdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.0',
+        currentRaw: '1.2.0',
+        patch: null,
+        minor: VersionTarget::fromRaw('1.3.5'),
+        major: null,
+        isDev: false,
+        repoUrl: '',
+    );
+    $prompt = new UpgradePrompt([$pkg], availableVersionsResolver: $mock);
+
+    // Set cursor to 0 before picker opens; picker rows will be ['── 1.3.x ──', $v]
+    // After picker opens pickerCursor will be set to firstSelectableIndex = 1
+    // So pressing SPACE selects $v at index 1, not the header
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.5']);
+});
+
+// ---------------------------------------------------------------------------
+// Picker pre-selects the current selection when opened
+// ---------------------------------------------------------------------------
+
+\it('picker cursor starts at the already-selected version when re-opened', function (): void {
+    // Select 1.3.0 via space, then open picker — cursor should land on 1.3.0 not 1.3.1
+    Prompt::fake([Key::SPACE, 'v', Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.3.1');
+    $v0 = VersionTarget::fromRaw('1.3.0');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    // Called once (v key), returns two versions
+    $mock->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v0]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // SPACE selects 1.3.0 (default); then v opens picker; picker cursor is at 1.3.0 (index 1);
+    // pressing SPACE again re-selects 1.3.0
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+\it('picker cursor jumps to existing selection on a different column than default', function (): void {
+    // Select 1.3.5 (a non-default minor) via picker first, then re-open picker — cursor lands on it
+    Prompt::fake(['v', Key::DOWN_ARROW, Key::SPACE, 'v', Key::SPACE, "\n"]);
+
+    $versionTarget = VersionTarget::fromRaw('1.3.5');
+    $v0 = VersionTarget::fromRaw('1.3.0');
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->twice()->andReturn([$versionTarget, $v0]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);
+    $prompt->prompt();
+
+    // First v: opens picker, DOWN goes to 1.3.0 (index 1), SPACE selects it
+    // Second v: re-opens picker, cursor should be at index 1 (1.3.0), SPACE re-selects it
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+// ---------------------------------------------------------------------------
+// pickerSelect defensive guards (lines 244 and 248)
+// ---------------------------------------------------------------------------
+
+\it('pickerSelect is a no-op when pickerColumns is empty (cursor out of bounds)', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    // Manually inject picker state with no columns so cursor lookup yields null
+    $prompt->isPickerActive = true;
+    $prompt->pickerColumns  = [];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+    $prompt->pickerBumpType = BumpType::Minor;
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('pickerSelect is a no-op when pickerBumpType is null', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    // Cursor points to a real VersionTarget but pickerBumpType is null
+    $prompt->isPickerActive = true;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.0')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+    $prompt->pickerBumpType = null;
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('pickerSelect is a no-op when column has no versions (row out of bounds)', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->isPickerActive = true;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+    $prompt->pickerBumpType = BumpType::Minor;
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('RIGHT at last column is a no-op', function (): void {
+    Prompt::fake([Key::RIGHT_ARROW, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->isPickerActive = true;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.0')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+    $prompt->pickerBumpType = BumpType::Minor;
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('pickerNavigate is a no-op when pickerColumns is empty', function (): void {
+    Prompt::fake([Key::DOWN_ARROW, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->isPickerActive = true;
+    $prompt->pickerColumns  = [];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+    $prompt->pickerBumpType = BumpType::Minor;
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+

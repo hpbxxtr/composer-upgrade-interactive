@@ -263,3 +263,203 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     \expect(\renderPrompt($prompt))->toBeString();
 });
+
+// ---------------------------------------------------------------------------
+// Inline picker rendering
+// ---------------------------------------------------------------------------
+
+\it('renders picker header row (bump label + triangle) when picker is active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.1'), VersionTarget::fromRaw('1.3.0')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('minor ▾');
+});
+
+\it('renders version list rows when picker is active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.1'), VersionTarget::fromRaw('1.3.0')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('1.3.1')
+        ->and($stripped)->toContain('1.3.0')
+        ->and($stripped)->toContain('(latest)')
+    ;
+});
+
+\it('renders column headers when picker is active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $pkg = new OutdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.0',
+        currentRaw: '1.2.0',
+        patch: null,
+        minor: VersionTarget::fromRaw('1.4.0'),
+        major: null,
+        isDev: false,
+        repoUrl: '',
+    );
+    $prompt = new UpgradePrompt([$pkg]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.5')]),
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.4.x', [VersionTarget::fromRaw('1.4.0')]),
+    ];
+    $prompt->pickerCol      = 1;
+    $prompt->pickerRow      = 0;
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('1.4.x')
+        ->and($stripped)->toContain('1.3.x')
+    ;
+});
+
+\it('renders picker help line instead of normal help when picker is active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor();
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.0')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 0;
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('navigate')
+        ->and($stripped)->toContain('←→ column')
+        ->and($stripped)->toContain('esc close')
+        ->and($stripped)->not->toContain('v versions')
+    ;
+});
+
+\it('renders normal help line with v versions hint when picker is not active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->prompt();
+
+    $prompt->state = 'initial';
+    $output        = \renderPrompt($prompt);
+    $stripped      = \stripAnsi($output);
+
+    \expect($stripped)->toContain('v versions');
+});
+
+// ---------------------------------------------------------------------------
+// Picker-selected version shows in the main row cell
+// ---------------------------------------------------------------------------
+
+\it('cell shows the picker-selected version instead of the default target', function (): void {
+    Prompt::fake(["\n"]);
+
+    // Package has minor target 1.3.2, but user picked 1.3.1 via the picker
+    $versionTarget = VersionTarget::fromRaw('1.3.1');
+    $outdatedPackage      = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.2');
+    $prompt   = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state                    = 'initial';
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        $versionTarget,
+    );
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('1.3.1') // selected version in cell
+        ->and($stripped)->toContain('1.2.3...1.3.1') // footer compare URL uses selected version
+        ->and($stripped)->not->toContain('1.2.3...1.3.2') // not the default target
+    ;
+});
+
+// ---------------------------------------------------------------------------
+// Footer updates while navigating the picker
+// ---------------------------------------------------------------------------
+
+\it('footer compare URL reflects the picker cursor version while picker is active', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage    = \outdatedPackage(name: 'vendor/pkg', current: '1.2.3', minor: VersionTarget::fromRaw('1.3.5'));
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.5'), VersionTarget::fromRaw('1.3.2')])];
+    $prompt->pickerCol      = 0;
+    $prompt->pickerRow      = 1; // cursor on 1.3.2
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('1.2.3...1.3.2') // compare URL uses cursor version
+        ->and($stripped)->not->toContain('1.2.3...1.3.5') // not the default target
+    ;
+});
+
+\it('pads shorter columns with empty cells when column heights differ', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage    = \outdatedPackageWithMinor();
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    // col 0 has 1 version, col 1 has 2 — row 1 of col 0 is empty (padding branch)
+    $prompt->pickerColumns  = [
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.5')]),
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.4.x', [VersionTarget::fromRaw('1.4.1'), VersionTarget::fromRaw('1.4.0')]),
+    ];
+    $prompt->pickerCol = 1;
+    $prompt->pickerRow = 0;
+
+    $output   = \renderPrompt($prompt);
+    $stripped = \stripAnsi($output);
+
+    \expect($stripped)->toContain('1.3.x')
+        ->and($stripped)->toContain('1.4.x')
+        ->and($stripped)->toContain('1.4.1')
+        ->and($stripped)->toContain('1.4.0')
+    ;
+});
