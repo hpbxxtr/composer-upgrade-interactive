@@ -16,6 +16,7 @@ use function count;
 use function implode;
 use function max;
 use function min;
+use function range;
 use function sprintf;
 
 /**
@@ -133,18 +134,39 @@ final class UpgradePromptRenderer extends Renderer
             }
 
             $this->line($this->renderRow($upgradePrompt, $entry, $i, $maxName, $maxFrom, $colW, $nameLabel));
+
+            // Render inline picker rows immediately after the active row
+            if ($upgradePrompt->isPickerActive && $i === $upgradePrompt->activeRow) {
+                foreach ($this->renderPickerTable($upgradePrompt) as $line) {
+                    $this->line($line);
+                }
+            }
         }
 
         // Footer: compare URL + abandonment notice
         $footerLines = [];
 
-        if ($focusedBump !== null) {
-            $color  = self::BUMP_COLOR[$focusedBump->value];
-            $urls   = (new ComposeUrlResolver($activeEntry))->resolve($focusedBump);
+        $footerBump = $upgradePrompt->isPickerActive ? $upgradePrompt->pickerBumpType : $focusedBump;
+
+        if ($upgradePrompt->isPickerActive) {
+            $cursorCol    = $upgradePrompt->pickerColumns[$upgradePrompt->pickerCol] ?? null;
+            $footerTarget = $cursorCol instanceof PickerColumn
+                ? ($cursorCol->versions[$upgradePrompt->pickerRow] ?? null)
+                : null;
+        } else {
+            $selection    = $upgradePrompt->selections[$activeEntry->name] ?? null;
+            $footerTarget = ($selection !== null && $selection->column === $focusedBump)
+                ? $selection->target
+                : null;
+        }
+
+        if ($footerBump instanceof BumpType) {
+            $color = self::BUMP_COLOR[$footerBump->value];
+            $urls  = (new ComposeUrlResolver($activeEntry))->resolve($footerBump, $footerTarget);
 
             if ($urls->compareUrl !== null) {
                 $footerLines[]
-                    = $indent . $color . $this->visPad($focusedBump->value, 5) . self::ANSI_RESET
+                    = $indent . $color . $this->visPad($footerBump->value, 5) . self::ANSI_RESET
                     . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $urls->compareUrl . self::ANSI_RESET;
             }
 
@@ -172,7 +194,12 @@ final class UpgradePromptRenderer extends Renderer
 
         // Help
         $this->line('');
-        $this->line($indent . $this->dimStr('↑↓ navigate · ←→ column · space select · enter confirm'));
+
+        if ($upgradePrompt->isPickerActive) {
+            $this->line($indent . $this->dimStr('↑↓ navigate · ←→ column · space select · esc close'));
+        } else {
+            $this->line($indent . $this->dimStr('↑↓ navigate · ←→ column · space select · v versions · enter confirm'));
+        }
 
         return (string) $this;
     }
@@ -201,7 +228,7 @@ final class UpgradePromptRenderer extends Renderer
             : ' ';
 
         $check = $selectedK !== null
-            ? self::BUMP_COLOR[$selectedK->value] . '◉' . self::ANSI_RESET
+            ? self::BUMP_COLOR[$selectedK->column->value] . '◉' . self::ANSI_RESET
             : $this->dimStr('◯');
 
         $label   = $nameLabel($outdatedPackage);
@@ -212,7 +239,17 @@ final class UpgradePromptRenderer extends Renderer
             . Str::repeat(' ', max(0, $maxName - Str::length($label)));
         $fromStr = $this->dimStr(Str::padRight($outdatedPackage->current, $maxFrom));
 
-        $sep  = $this->dimStr('  │  ');
+        $sep = $this->dimStr('  │  ');
+
+        // If the picker is open for this row, render a compact header instead of the column grid
+        if ($isActive && $upgradePrompt->isPickerActive && $upgradePrompt->pickerBumpType instanceof \Hpbxxtr\UpgradeInteractive\Resolver\BumpType) {
+            $bumpType    = $upgradePrompt->pickerBumpType;
+            $color       = self::BUMP_COLOR[$bumpType->value];
+            $pickerLabel = $color . $bumpType->value . ' ▾' . self::ANSI_RESET;
+
+            return sprintf('%s %s %s  %s%s%s', $cursor, $check, $nameStr, $fromStr, $sep, $pickerLabel);
+        }
+
         $cols = implode($sep, array_map(
             function (BumpType $bumpType) use ($outdatedPackage, $focusedBump, $selectedK, $colW): string {
                 $target = $outdatedPackage->target($bumpType);
@@ -221,9 +258,12 @@ final class UpgradePromptRenderer extends Renderer
                     return $this->visPad('  ' . $this->dimStr('–'), $colW + 2);
                 }
 
-                $ver        = $target->version;
                 $isFocused  = $bumpType === $focusedBump;
-                $isSelected = $bumpType === $selectedK;
+                $isSelected = $bumpType === $selectedK?->column;
+                // Show the picker-selected version if it differs from the package's default target
+                $ver        = $selectedK !== null && $selectedK->column === $bumpType
+                    ? $selectedK->target->version
+                    : $target->version;
                 $color      = self::BUMP_COLOR[$bumpType->value];
 
                 $text = match (true) {
@@ -239,6 +279,98 @@ final class UpgradePromptRenderer extends Renderer
         ));
 
         return sprintf('%s %s %s  %s%s%s', $cursor, $check, $nameStr, $fromStr, $sep, $cols);
+    }
+
+    /** @return list<string> */
+    private function renderPickerTable(UpgradePrompt $upgradePrompt): array
+    {
+        $columns = $upgradePrompt->pickerColumns;
+
+        if ($columns === []) {
+            return [];
+        }
+
+        $indent = '        ';
+        $sep    = ' ' . $this->dimStr('|') . ' ';
+
+        $lastColIdx   = count($columns) - 1;
+        $latestSuffix = $this->dimStr('  (latest)');
+        $latestLen    = Str::length('  (latest)');
+
+        /** @var list<int> $colWidths */
+        $colWidths = [];
+
+        foreach ($columns as $cIdx => $col) {
+            $headerLen = Str::length('── ' . $col->label . ' ──');
+            $maxVerLen = 0;
+
+            foreach ($col->versions as $v) {
+                $len = Str::length($v->version);
+
+                if ($len > $maxVerLen) {
+                    $maxVerLen = $len;
+                }
+            }
+
+            $cellWidth = 2 + $maxVerLen;
+
+            if ($cIdx === $lastColIdx && isset($col->versions[0])) {
+                $cellWidth = max($cellWidth, 2 + Str::length($col->versions[0]->version) + $latestLen);
+            }
+
+            $colWidths[] = max($headerLen, $cellWidth);
+        }
+
+        $lines = [];
+
+        $headers = [];
+
+        foreach ($columns as $cIdx => $col) {
+            $colWidth  = $colWidths[$cIdx] ?? 0;
+            $headers[] = $this->visPad($this->dimStr('── ' . $col->label . ' ──'), $colWidth);
+        }
+
+        $lines[] = $indent . implode($sep, $headers);
+
+        $maxRows = 0;
+
+        foreach ($columns as $col) {
+            $count = count($col->versions);
+
+            if ($count > $maxRows) {
+                $maxRows = $count;
+            }
+        }
+
+        foreach (range(0, $maxRows - 1) as $rowIdx) {
+            $cells = [];
+
+            foreach ($columns as $cIdx => $col) {
+                $colWidth = $colWidths[$cIdx] ?? 0;
+                $version  = $col->versions[$rowIdx] ?? null;
+
+                if (!$version instanceof VersionTarget) {
+                    $cells[] = Str::repeat(' ', $colWidth);
+
+                    continue;
+                }
+
+                $isCursor = $cIdx === $upgradePrompt->pickerCol && $rowIdx === $upgradePrompt->pickerRow;
+                $suffix   = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
+
+                if ($isCursor) {
+                    $text = self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version . self::ANSI_RESET . $suffix;
+                } else {
+                    $text = '  ' . $this->dimStr($version->version) . $suffix;
+                }
+
+                $cells[] = $this->visPad($text, $colWidth);
+            }
+
+            $lines[] = $indent . implode($sep, $cells);
+        }
+
+        return $lines;
     }
 
     private function sectionLabel(string $label, int $totalWidth): string

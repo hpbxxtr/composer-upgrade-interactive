@@ -6,6 +6,7 @@ namespace Hpbxxtr\UpgradeInteractive\Resolver\Url;
 
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 use Override;
 
 /**
@@ -44,9 +45,9 @@ final class ComposeUrlResolver extends AbstractUrlResolver
     }
 
     #[Override]
-    public function resolve(BumpType $bumpType): UrlResult
+    public function resolve(BumpType $bumpType, ?VersionTarget $versionTarget = null): UrlResult
     {
-        return $this->firstMatch()?->resolve($bumpType) ?? new UrlResult(null, null);
+        return $this->firstMatch()?->resolve($bumpType, $versionTarget) ?? new UrlResult(null, null);
     }
 
     private function firstMatch(): ?UrlResolverInterface

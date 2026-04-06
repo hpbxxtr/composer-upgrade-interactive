@@ -17,8 +17,8 @@ abstract class AbstractUrlResolver implements UrlResolverInterface
         protected readonly OutdatedPackage $package,
     ) {}
 
-    protected function targetVersion(BumpType $bumpType): ?VersionTarget
+    protected function targetVersion(BumpType $bumpType, ?VersionTarget $versionTarget = null): ?VersionTarget
     {
-        return $this->package->target($bumpType);
+        return $versionTarget ?? $this->package->target($bumpType);
     }
 }

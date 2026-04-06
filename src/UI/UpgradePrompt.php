@@ -4,15 +4,20 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
+use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 use Laravel\Prompts\Key;
 use Laravel\Prompts\Prompt;
 use Override;
 
 use function array_fill_keys;
 use function array_map;
+use function array_reverse;
 use function count;
+use function explode;
 use function in_array;
 use function max;
 use function min;
@@ -27,16 +32,32 @@ final class UpgradePrompt extends Prompt
     public int $activeCol = 0;
 
     /**
-     * @var array<string, BumpType|null>
+     * @var array<string, VersionSelection|null>
      */
     public array $selections;
+
+    public bool $isPickerActive = false;
+
+    /** @var list<PickerColumn> */
+    public array $pickerColumns = [];
+
+    public int $pickerCol = 0;
+
+    public int $pickerRow = 0;
+
+    public ?BumpType $pickerBumpType = null;
+
+    private ?string $pickerPackageName = null;
+
+    private ?VersionSelection $versionSelection = null;
 
     /**
      * @param list<OutdatedPackage> $entries
      */
     public function __construct(
-        public readonly array $entries,
-        public readonly string $label = 'Select versions to update',
+        public readonly array                                $entries,
+        public readonly string                               $label = 'Select versions to update',
+        private readonly ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
     ) {
         self::$themes['default'][self::class] = UpgradePromptRenderer::class;
 
@@ -59,17 +80,13 @@ final class UpgradePrompt extends Prompt
         $result = [];
 
         foreach ($this->entries as $entry) {
-            $bump = $this->selections[$entry->name] ?? null;
+            $sel = $this->selections[$entry->name] ?? null;
 
-            if ($bump === null) {
+            if ($sel === null) {
                 continue;
             }
 
-            $target = $entry->target($bump);
-
-            if ($target !== null) {
-                $result[$entry->name] = $target->versionRaw;
-            }
+            $result[$entry->name] = $sel->target->versionRaw;
         }
 
         return $result;
@@ -77,15 +94,37 @@ final class UpgradePrompt extends Prompt
 
     private function handleKey(string $key): void
     {
+        if ($this->isPickerActive) {
+            $this->handlePickerKey($key);
+
+            return;
+        }
+
         match (true) {
             in_array($key, [Key::UP, Key::UP_ARROW, Key::CTRL_P], true)       => $this->moveRow(-1),
             in_array($key, [Key::DOWN, Key::DOWN_ARROW, Key::CTRL_N], true)   => $this->moveRow(1),
             in_array($key, [Key::LEFT, Key::LEFT_ARROW, Key::CTRL_B], true)   => $this->moveCol(-1),
             in_array($key, [Key::RIGHT, Key::RIGHT_ARROW, Key::CTRL_F], true) => $this->moveCol(1),
-            $key === Key::SPACE                                               => $this->toggleSelection(),
-            $key === "\n" || $key === "\r"                                    => $this->submit(),
-            $key === Key::CTRL_C                                              => $this->cancelPrompt(),
-            default                                                           => false, // ignore unrecognised keys
+            $key === Key::SPACE                                                => $this->toggleSelection(),
+            $key === 'v'                                                       => $this->openPicker(),
+            $key === "\n" || $key === "\r"                                     => $this->submit(),
+            $key === Key::CTRL_C                                               => $this->cancelPrompt(),
+            default                                                            => false, // ignore unrecognised keys
+        };
+    }
+
+    private function handlePickerKey(string $key): void
+    {
+        match (true) {
+            in_array($key, [Key::UP, Key::UP_ARROW, Key::CTRL_P], true)       => $this->pickerNavigate(-1),
+            in_array($key, [Key::DOWN, Key::DOWN_ARROW, Key::CTRL_N], true)   => $this->pickerNavigate(1),
+            in_array($key, [Key::RIGHT, Key::RIGHT_ARROW, Key::CTRL_F], true) => $this->pickerMoveCol(1),
+            in_array($key, [Key::LEFT, Key::LEFT_ARROW, Key::CTRL_B], true)   => $this->pickerMoveCol(-1),
+            $key === Key::SPACE                                                => $this->pickerSelect(),
+            $key === Key::ESCAPE                                               => $this->pickerCancel(),
+            $key === "\n" || $key === "\r"                                     => $this->submit(),
+            $key === Key::CTRL_C                                               => $this->cancelPrompt(),
+            default                                                            => false,
         };
     }
 
@@ -128,16 +167,209 @@ final class UpgradePrompt extends Prompt
             return;
         }
 
-        $this->selections[$entry->name] = $current === $col ? null : $col;
+        if ($current !== null && $current->column === $col) {
+            $this->selections[$entry->name] = null;
+        } else {
+            $target = $entry->target($col);
+
+            if ($target === null) {
+                return;
+            }
+
+            $this->selections[$entry->name] = new VersionSelection($col, $target);
+        }
+    }
+
+    private function openPicker(): void
+    {
+        if (!$this->availableVersionsResolver instanceof \Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface) {
+            return;
+        }
+
+        $entry = $this->entries[$this->activeRow] ?? null;
+
+        if ($entry === null) {
+            return;
+        }
+
+        $bumps = $entry->availableBumps();
+
+        if ($bumps === []) {
+            return;
+        }
+
+        $bumpType = $bumps[min($this->activeCol, count($bumps) - 1)] ?? null;
+
+        if ($bumpType === null) {
+            return;
+        }
+
+        $versions = $this->availableVersionsResolver->resolve($entry->name, $entry->currentRaw, $bumpType);
+
+        if ($versions === []) {
+            return;
+        }
+
+        $existing    = $this->selections[$entry->name] ?? null;
+        $pickerCols  = $this->buildPickerColumns($bumpType, $versions);
+
+        $this->pickerColumns     = $pickerCols;
+        $this->pickerBumpType    = $bumpType;
+        $this->pickerPackageName = $entry->name;
+        $this->versionSelection  = $existing;
+
+        [$this->pickerCol, $this->pickerRow] = ($existing !== null && $existing->column === $bumpType)
+            ? $this->findVersionPosition($pickerCols, $existing->target->versionRaw)
+            : $this->defaultPosition($pickerCols);
+
+        $this->isPickerActive = true;
+    }
+
+    private function pickerMoveCol(int $direction): void
+    {
+        $newCol = $this->pickerCol + $direction;
+
+        if ($newCol < 0) {
+            $this->pickerCancel();
+
+            return;
+        }
+
+        if (!isset($this->pickerColumns[$newCol])) {
+            return;
+        }
+
+        $this->pickerCol = $newCol;
+        $this->pickerRow = min($this->pickerRow, count($this->pickerColumns[$newCol]->versions) - 1);
+    }
+
+    private function pickerNavigate(int $direction): void
+    {
+        $col = $this->pickerColumns[$this->pickerCol] ?? null;
+
+        if ($col === null) {
+            return;
+        }
+
+        $newRow = $this->pickerRow + $direction;
+
+        if (isset($col->versions[$newRow])) {
+            $this->pickerRow = $newRow;
+        }
+    }
+
+    private function pickerSelect(): void
+    {
+        $col = $this->pickerColumns[$this->pickerCol] ?? null;
+
+        if (!$col instanceof PickerColumn) {
+            return;
+        }
+
+        $row = $col->versions[$this->pickerRow] ?? null;
+
+        if (!$row instanceof VersionTarget) {
+            return;
+        }
+
+        if (!$this->pickerBumpType instanceof \Hpbxxtr\UpgradeInteractive\Resolver\BumpType || $this->pickerPackageName === null) {
+            return;
+        }
+
+        $this->selections[$this->pickerPackageName] = new VersionSelection($this->pickerBumpType, $row);
+        $this->closePicker();
+    }
+
+    private function pickerCancel(): void
+    {
+        if ($this->pickerPackageName !== null) {
+            $this->selections[$this->pickerPackageName] = $this->versionSelection;
+        }
+
+        $this->closePicker();
+    }
+
+    private function closePicker(): void
+    {
+        $this->isPickerActive    = false;
+        $this->pickerColumns     = [];
+        $this->pickerCol         = 0;
+        $this->pickerRow         = 0;
+        $this->pickerBumpType    = null;
+        $this->pickerPackageName = null;
+        $this->versionSelection  = null;
     }
 
     private function cancelPrompt(): void
     {
+        $this->closePicker();
+
         $this->selections = array_fill_keys(
             array_map(static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name, $this->entries),
             null,
         );
 
         $this->submit();
+    }
+
+    /**
+     * @param list<VersionTarget> $versions newest-first
+     * @return list<PickerColumn>
+     */
+    private function buildPickerColumns(BumpType $bumpType, array $versions): array
+    {
+        $columns      = [];
+        $currentLabel = null;
+        $currentVers  = [];
+
+        foreach ($versions as $version) {
+            $parts = explode('.', $version->version);
+            $label = $bumpType === BumpType::Major
+                ? $parts[0] . '.x'
+                : $parts[0] . '.' . ($parts[1] ?? '?') . '.x';
+
+            if ($label !== $currentLabel) {
+                if ($currentLabel !== null) {
+                    $columns[] = new PickerColumn($currentLabel, $currentVers);
+                }
+
+                $currentLabel = $label;
+                $currentVers  = [];
+            }
+
+            $currentVers[] = $version;
+        }
+
+        if ($currentLabel !== null) {
+            $columns[] = new PickerColumn($currentLabel, $currentVers);
+        }
+
+        return array_reverse($columns);
+    }
+
+    /**
+     * @param list<PickerColumn> $columns
+     * @return array{int, int} [col, row]
+     */
+    private function findVersionPosition(array $columns, string $versionRaw): array
+    {
+        foreach ($columns as $colIdx => $col) {
+            foreach ($col->versions as $rowIdx => $version) {
+                if ($version->versionRaw === $versionRaw) {
+                    return [$colIdx, $rowIdx];
+                }
+            }
+        }
+
+        return $this->defaultPosition($columns);
+    }
+
+    /**
+     * @param list<PickerColumn> $columns
+     * @return array{int, int} last column, first row (newest series, latest version)
+     */
+    private function defaultPosition(array $columns): array
+    {
+        return [max(0, count($columns) - 1), 0];
     }
 }

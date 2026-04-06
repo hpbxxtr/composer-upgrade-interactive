@@ -9,6 +9,7 @@ use Composer\Util\ProcessExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
+use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
@@ -52,6 +53,8 @@ final class UpgradeInteractiveCommand extends BaseCommand
         $io = $this->getIO();
         $io->write('<info>Fetching composer package data…</info>');
 
+        $processExecutor = null;
+
         try {
             if ($this->packageResolver instanceof PackageResolverInterface) {
                 $entries = $this->packageResolver->resolve();
@@ -78,7 +81,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
             return 1;
         }
 
-        $ui         = $this->interactiveUI ?? new InteractiveUI();
+        $ui = $this->interactiveUI ?? new InteractiveUI(
+            $processExecutor instanceof \Composer\Util\ProcessExecutor ? new AvailableVersionsResolver($processExecutor) : null,
+        );
+
         $selections = $ui->ask($entries);
 
         if ($selections === []) {

@@ -34,9 +34,9 @@ final class GitlabUrlResolver extends AbstractUrlResolver
     }
 
     #[Override]
-    public function resolve(BumpType $bumpType): UrlResult
+    public function resolve(BumpType $bumpType, ?VersionTarget $versionTarget = null): UrlResult
     {
-        $target = $this->targetVersion($bumpType);
+        $target = $this->targetVersion($bumpType, $versionTarget);
 
         if (!$target instanceof VersionTarget || $this->slug === null) {
             return new UrlResult(null, null);
