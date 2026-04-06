@@ -18,19 +18,28 @@ afterEach(function (): void {
     \expect($ui->ask([\outdatedPackageWithMinor()]))->toBe([]);
 });
 
-\it('returns selected package after space + enter', function (): void {
-    Prompt::fake([Key::SPACE, "\n"]);
+\it('returns selected package after space + enter + confirm', function (): void {
+    Prompt::fake([Key::SPACE, "\n", "\n"]); // SPACE selects, Enter submits, Enter confirms
 
-    $ui  = new InteractiveUI();
+    $ui              = new InteractiveUI();
     $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
 
     \expect($ui->ask([$outdatedPackage]))->toBe(['vendor/pkg' => '1.3.0']);
 });
 
+\it('returns empty array when user declines the confirmation', function (): void {
+    Prompt::fake([Key::SPACE, "\n", 'n', "\n"]); // SPACE selects, Enter submits, n declines, Enter confirms
+
+    $ui              = new InteractiveUI();
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+
+    \expect($ui->ask([$outdatedPackage]))->toBe([]);
+});
+
 \it('returns empty array after Ctrl+C cancels the prompt', function (): void {
     Prompt::fake([Key::SPACE, Key::CTRL_C]);
 
-    $ui  = new InteractiveUI();
+    $ui              = new InteractiveUI();
     $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
 
     \expect($ui->ask([$outdatedPackage]))->toBe([]);
