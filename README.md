@@ -26,9 +26,10 @@
 
 
 - **Patch / minor / major** columns per package — choose exactly how far to upgrade each one
+- **Full version picker** — press `v` on any cell to browse all available stable versions in an inline multi-column list and pin an exact release
 - **require and require-dev** sections rendered separately
 - **Abandoned package warnings** with replacement suggestions
-- **Comparison and release URLs** in the footer for whichever bump type is focused (GitHub, GitLab, Packagist)
+- **Comparison and release URLs** in the footer for whichever bump type or version is focused (GitHub, GitLab, Packagist)
 - **Parallel dependency resolution** — all outdated checks run concurrently
 - **Full keyboard navigation** — arrow keys, vim (`hjkl`), and Emacs (`Ctrl+P/N/B/F`) bindings
 
@@ -69,7 +70,7 @@ composer h:ui
 
 Aliases: `composer hpbxxtr:upgrade-interactive` · `composer upgrade-interactive`
 
-Navigate to a package, move across the patch/minor/major columns with the arrow keys, press `space` to select a target version, then `enter` to apply.
+Navigate to a package, move across the patch/minor/major columns with the arrow keys, press `space` to select the latest version for that bump level, or press `v` to open an inline picker and choose any specific stable release. Press `enter` to confirm and apply.
 
 ### Options
 
@@ -93,15 +94,27 @@ composer h:ui --caret
 
 ## ⌨️ Key bindings
 
+**Normal mode**
+
 | Key | Action |
 |---|---|
 | `↑` / `k` / `Ctrl+P` | Move up |
 | `↓` / `j` / `Ctrl+N` | Move down |
 | `←` / `h` / `Ctrl+B` | Move left (previous bump column) |
 | `→` / `l` / `Ctrl+F` | Move right (next bump column) |
-| `space` | Toggle selection |
+| `space` | Toggle selection (latest version for focused bump) |
+| `v` | Open version picker for the focused cell |
 | `enter` | Confirm and apply upgrades |
 | `Ctrl+C` | Cancel |
+
+**Version picker**
+
+| Key | Action |
+|---|---|
+| `↑` / `↓` | Navigate versions within the current column |
+| `←` / `→` | Switch between version columns (oldest left, newest right) |
+| `space` | Select the highlighted version and close picker |
+| `esc` / `←` at first column | Close picker without changing selection |
 
 ---
 
@@ -109,7 +122,8 @@ composer h:ui --caret
 
 1. Runs `composer outdated` in parallel for patch, minor, and major ranges to build a version map.
 2. Renders a table-style multiselect — one row per outdated package, three columns for each bump level.
-3. On confirm, writes updated constraints to `composer.json` (exact version by default, caret range with `--caret`) then runs `composer update --with-all-dependencies` for all selected packages in one pass.
+3. Pressing `v` on a focused cell fetches all stable releases for that bump level via `composer show -a` and renders them as a side-by-side column picker (grouped by series — e.g. `1.4.x`, `1.3.x`).
+4. On confirm, a summary prompt lists the number of packages selected. Writes updated constraints to `composer.json` (exact version by default, caret range with `--caret`) then runs `composer update --with-all-dependencies` for all selected packages in one pass.
 
 ---
 
