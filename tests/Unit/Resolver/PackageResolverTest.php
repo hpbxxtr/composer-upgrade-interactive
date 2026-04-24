@@ -3,13 +3,17 @@
 declare(strict_types=1);
 
 use Composer\Composer;
+use Composer\Package\BasePackage;
+use Composer\Package\CompletePackage;
+use Composer\Package\Link;
 use Composer\Package\RootPackageInterface;
-use Composer\Util\Loop;
-use Composer\Util\ProcessExecutor;
+use Composer\Package\Version\VersionParser;
+use Composer\Repository\ArrayRepository;
+use Composer\Repository\InstalledRepositoryInterface;
+use Composer\Repository\RepositoryManager;
+use Composer\Repository\RepositorySet;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
-use React\Promise\PromiseInterface;
-use Symfony\Component\Process\Process;
 
 afterEach(function (): void {
     \Mockery::close();
@@ -20,91 +24,80 @@ afterEach(function (): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a mock Process that reports success and returns $output.
+ * Build a CompletePackage with normalised version derived from $prettyVersion.
  */
-function mockProcess(bool $successful, string $output = '', string $errorOutput = ''): Process
+function makeInstalledPackage(string $name, string $prettyVersion): CompletePackage
 {
-    $mock = \Mockery::mock(Process::class);
-    $mock->shouldReceive('isSuccessful')->andReturn($successful);
-    $mock->shouldReceive('getOutput')->andReturn($output);
-    $mock->shouldReceive('getErrorOutput')->andReturn($errorOutput);
+    $vp = new VersionParser();
 
-    return $mock;
+    return new CompletePackage($name, $vp->normalize($prettyVersion), $prettyVersion);
 }
 
 /**
- * Build a ProcessExecutor mock whose executeAsync() returns promises that
- * resolve synchronously via React\Promise\resolve().
+ * Build an abandoned CompletePackage.
  *
- * $outputs is a map keyed on the unique command fragment used to identify
- * each call: 'patch-only', 'minor-only', 'major-only', or default (show).
- *
- * @param array<string, string> $outputs keyed by fragment: patch|minor|major|show
+ * @param string|true $replacement string = replacement package name, true = no replacement stated
  */
-function mockProcessExecutor(array $outputs): ProcessExecutor
+function makeAbandonedInstalledPackage(string $name, string $prettyVersion, string|bool $replacement = true): CompletePackage
 {
-    $mock = \Mockery::mock(ProcessExecutor::class);
+    $completePackage = \makeInstalledPackage($name, $prettyVersion);
+    $completePackage->setAbandoned($replacement);
 
-    $mock->shouldReceive('executeAsync')
-        ->andReturnUsing(static function (string $cmd) use ($outputs): PromiseInterface {
-            $json = match (true) {
-                str_contains($cmd, '--patch-only') => $outputs['patch'] ?? '',
-                str_contains($cmd, '--minor-only') => $outputs['minor'] ?? '',
-                str_contains($cmd, '--major-only') => $outputs['major'] ?? '',
-                default                             => $outputs['show'] ?? '',
-            };
-
-            return \React\Promise\resolve(\mockProcess(true, $json));
-        })
-    ;
-
-    return $mock;
+    return $completePackage;
 }
 
 /**
- * Build a Composer mock wired with a no-op Loop and the given dev-require names.
+ * Build a RepositorySet containing the given available packages.
  *
- * @param list<string> $devPackageNames
+ * @param list<CompletePackage> $packages
  */
-function mockComposerForResolver(array $devPackageNames = []): Composer
+function makeVersionSet(array $packages): RepositorySet
 {
-    $mock = \Mockery::mock(Loop::class);
-    $mock->shouldReceive('wait')->byDefault();
+    $set = new RepositorySet('stable', []);
+    $set->addRepository(new ArrayRepository($packages));
 
-    $devRequires = [];
+    return $set;
+}
+
+/**
+ * Build a Composer mock wired with an InstalledRepository returning $installedPackages.
+ *
+ * @param list<CompletePackage> $installedPackages
+ * @param list<string>          $devPackageNames   package names that live in require-dev
+ */
+function mockComposerWithInstalled(array $installedPackages, array $devPackageNames = []): Composer
+{
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn($installedPackages);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+
+    $devRequires  = [];
+    $prodRequires = [];
 
     foreach ($devPackageNames as $devPackageName) {
-        $devRequires[$devPackageName] = new stdClass(); // Link value is not inspected
+        $devRequires[$devPackageName] = \Mockery::mock(Link::class);
     }
 
-    $package = \Mockery::mock(RootPackageInterface::class);
-    $package->shouldReceive('getDevRequires')->andReturn($devRequires);
+    foreach ($installedPackages as $installedPackage) {
+        if (!isset($devRequires[$installedPackage->getName()])) {
+            $prodRequires[$installedPackage->getName()] = \Mockery::mock(Link::class);
+        }
+    }
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn($devRequires);
+    $rootPkg->shouldReceive('getRequires')->andReturn($prodRequires);
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn([]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(false);
 
     $composer = \Mockery::mock(Composer::class);
-    $composer->shouldReceive('getLoop')->andReturn($mock);
-    $composer->shouldReceive('getPackage')->andReturn($package);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
 
     return $composer;
-}
-
-/**
- * Encode the standard "composer outdated" JSON shape.
- *
- * @param list<array{name:string,version:string,latest:string,latest-status:string,abandoned:bool|string}> $installed
- */
-function outdatedJson(array $installed): string
-{
-    return (string) json_encode(['installed' => $installed]);
-}
-
-/**
- * Encode the standard "composer show" JSON shape.
- *
- * @param list<array{name:string,version:string,source?:array{url:string,...}}> $installed
- */
-function showJson(array $installed): string
-{
-    return (string) json_encode(['installed' => $installed]);
 }
 
 // ---------------------------------------------------------------------------
@@ -112,14 +105,22 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('returns empty array when no packages are outdated', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([]),
-    ]);
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.0'); // same version → nothing to do
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
+
+    \expect($packages)->toBe([]);
+});
+
+\it('returns empty array when installed list is empty', function (): void {
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([]),
+        \makeVersionSet([]),
+    ))->resolve();
 
     \expect($packages)->toBe([]);
 });
@@ -129,18 +130,13 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('resolves a minor update for a single package', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([]),
-        'minor' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0'],
-        ]),
-    ]);
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.1.0');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages)->toHaveCount(1);
     \expect($packages[0])->toBeInstanceOf(OutdatedPackage::class);
@@ -150,23 +146,30 @@ function showJson(array $installed): string
     \expect($packages[0]->major)->toBeNull();
 });
 
-\it('resolves all three bump types independently', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'major' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '2.0.0', 'latest-status' => 'update-possible', 'abandoned' => false],
-        ]),
-        'show'  => \showJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0'],
-        ]),
-    ]);
+\it('resolves a patch update for a single package', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
+
+    \expect($packages[0]->patch?->version)->toBe('1.0.1');
+    \expect($packages[0]->minor)->toBeNull();
+    \expect($packages[0]->major)->toBeNull();
+});
+
+\it('resolves all three bump types independently', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $patchPkg  = \makeInstalledPackage('vendor/pkg', '1.0.1');
+    $minorPkg  = \makeInstalledPackage('vendor/pkg', '1.1.0');
+    $majorPkg  = \makeInstalledPackage('vendor/pkg', '2.0.0');
+
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$patchPkg, $minorPkg, $majorPkg]),
+    ))->resolve();
 
     \expect($packages)->toHaveCount(1);
     \expect($packages[0]->patch?->version)->toBe('1.0.1');
@@ -179,58 +182,138 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('nulls minor when patch and minor report the same version', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+    // 1.0.1 satisfies both ~1.0.0 (>=1.0.0 <1.1.0) and ^1.0.0 (>=1.0.0 <2.0.0),
+    // so both constraints resolve to the same candidate — minor should be deduped.
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
-    \expect($packages[0]->patch?->version)->toBe('1.1.0');
+    \expect($packages[0]->patch?->version)->toBe('1.0.1');
     \expect($packages[0]->minor)->toBeNull();
 });
 
-\it('nulls minor when minor and major report the same version', function (): void {
-    // The deduplication rule: when minor == major, minor is set to null and major is kept.
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([]),
-        'minor' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '2.0.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'major' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '2.0.0', 'latest-status' => 'update-possible', 'abandoned' => false],
-        ]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+\it('nulls minor when only a major version is available', function (): void {
+    // No version in the 1.x range → minor constraint (^1.0.0) finds nothing;
+    // major constraint (>=2.0.0) finds 2.0.0.
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $major     = \makeInstalledPackage('vendor/pkg', '2.0.0');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$major]),
+    ))->resolve();
 
     \expect($packages[0]->minor)->toBeNull();
     \expect($packages[0]->major?->version)->toBe('2.0.0');
 });
 
-\it('nulls major when patch and major report the same version (minor already null)', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '2.0.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '2.0.0', 'latest-status' => 'update-possible', 'abandoned' => false],
-        ]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+// ---------------------------------------------------------------------------
+// Stability flags / prefer-stable
+// ---------------------------------------------------------------------------
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+\it('resolves an update when the package has a per-package stability flag', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    \expect($packages[0]->patch?->version)->toBe('2.0.0');
-    \expect($packages[0]->major)->toBeNull();
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn([$completePackage]);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getRequires')->andReturn(['vendor/pkg' => \Mockery::mock(Link::class)]);
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    // beta stability flag for this package — exercises the stabilityFlags branch
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn(['vendor/pkg' => BasePackage::STABILITIES['beta']]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(false);
+
+    $composer = \Mockery::mock(Composer::class);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
+
+    $packages = (new PackageResolver($composer, \makeVersionSet([$available])))->resolve();
+
+    \expect($packages)->toHaveCount(1);
+    \expect($packages[0]->patch?->version)->toBe('1.0.1');
+});
+
+\it('uses installed package stability as best stability when prefer-stable is enabled', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
+
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn([$completePackage]);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getRequires')->andReturn(['vendor/pkg' => \Mockery::mock(Link::class)]);
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn([]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(true); // exercises the $isPreferStable true branch
+
+    $composer = \Mockery::mock(Composer::class);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
+
+    $packages = (new PackageResolver($composer, \makeVersionSet([$available])))->resolve();
+
+    \expect($packages)->toHaveCount(1);
+    \expect($packages[0]->patch?->version)->toBe('1.0.1');
+});
+
+// ---------------------------------------------------------------------------
+// Dev-branch packages
+// ---------------------------------------------------------------------------
+
+\it('returns no update for a dev-branch package when no newer candidate is found', function (): void {
+    $installed = new CompletePackage('vendor/pkg', 'dev-main', 'dev-main');
+
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$installed]),
+        \makeVersionSet([]), // nothing in the repo matches the dev-main constraint
+    ))->resolve();
+
+    // Dev-branch with no candidate → all targets null → excluded from results.
+    \expect($packages)->toBe([]);
+});
+
+// ---------------------------------------------------------------------------
+// Non-direct dependency filtering
+// ---------------------------------------------------------------------------
+
+\it('excludes transitive dependencies not listed in require or require-dev', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/transitive', '1.0.0');
+    $newer      = \makeInstalledPackage('vendor/transitive', '2.0.0');
+
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn([$completePackage]);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getRequires')->andReturn([]); // transitive NOT listed as direct
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn([]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(false);
+
+    $composer = \Mockery::mock(Composer::class);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
+
+    $packages = (new PackageResolver($composer, \makeVersionSet([$newer])))->resolve();
+
+    \expect($packages)->toBe([]);
 });
 
 // ---------------------------------------------------------------------------
@@ -238,46 +321,37 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('marks an abandoned package with a replacement', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/old', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => 'vendor/new'],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/old', 'version' => '1.0.0']]),
-    ]);
+    $completePackage = \makeAbandonedInstalledPackage('vendor/old', '1.0.0', 'vendor/new');
+    $available = \makeInstalledPackage('vendor/old', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->abandonedBy)->toBe('vendor/new');
 });
 
 \it('marks an abandoned package with no stated replacement as empty string', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/old', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => true],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/old', 'version' => '1.0.0']]),
-    ]);
+    $completePackage = \makeAbandonedInstalledPackage('vendor/old', '1.0.0', true);
+    $available = \makeInstalledPackage('vendor/old', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->abandonedBy)->toBe('');
 });
 
 \it('does not mark a non-abandoned package', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->abandonedBy)->toBeNull();
 });
@@ -287,31 +361,25 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('marks packages listed in require-dev as dev', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/dev-pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/dev-pkg', 'version' => '1.0.0']]),
-    ]);
+    $completePackage = \makeInstalledPackage('vendor/dev-pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/dev-pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(['vendor/dev-pkg']), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage], ['vendor/dev-pkg']),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->isDev)->toBeTrue();
 });
 
 \it('marks packages not in require-dev as prod', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(['vendor/other']), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage], []),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->isDev)->toBeFalse();
 });
@@ -321,40 +389,30 @@ function showJson(array $installed): string
 // ---------------------------------------------------------------------------
 
 \it('sorts prod packages before dev packages', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/dev-a', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-            ['name' => 'vendor/prod-b', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([
-            ['name' => 'vendor/dev-a', 'version' => '1.0.0'],
-            ['name' => 'vendor/prod-b', 'version' => '1.0.0'],
-        ]),
-    ]);
+    $completePackage    = \makeInstalledPackage('vendor/dev-a', '1.0.0');
+    $prodPkg   = \makeInstalledPackage('vendor/prod-b', '1.0.0');
+    $newerDev  = \makeInstalledPackage('vendor/dev-a', '1.0.1');
+    $newerProd = \makeInstalledPackage('vendor/prod-b', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(['vendor/dev-a']), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage, $prodPkg], ['vendor/dev-a']),
+        \makeVersionSet([$newerDev, $newerProd]),
+    ))->resolve();
 
     \expect($packages[0]->name)->toBe('vendor/prod-b');
     \expect($packages[1]->name)->toBe('vendor/dev-a');
 });
 
 \it('sorts packages alphabetically within the same section', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/z-pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-            ['name' => 'vendor/a-pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([
-            ['name' => 'vendor/z-pkg', 'version' => '1.0.0'],
-            ['name' => 'vendor/a-pkg', 'version' => '1.0.0'],
-        ]),
-    ]);
+    $completePackage   = \makeInstalledPackage('vendor/z-pkg', '1.0.0');
+    $aPkg   = \makeInstalledPackage('vendor/a-pkg', '1.0.0');
+    $newerZ = \makeInstalledPackage('vendor/z-pkg', '1.0.1');
+    $newerA = \makeInstalledPackage('vendor/a-pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage, $aPkg]),
+        \makeVersionSet([$newerZ, $newerA]),
+    ))->resolve();
 
     \expect($packages[0]->name)->toBe('vendor/a-pkg');
     \expect($packages[1]->name)->toBe('vendor/z-pkg');
@@ -364,114 +422,87 @@ function showJson(array $installed): string
 // Meta / repoUrl
 // ---------------------------------------------------------------------------
 
-\it('extracts the repo URL from the source array in show output', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'source' => ['url' => 'https://github.com/vendor/pkg', 'type' => 'git', 'reference' => 'abc']],
-        ]),
-    ]);
+\it('uses source URL from the installed package', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $completePackage->setSourceUrl('https://github.com/vendor/pkg.git');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
-    \expect($packages[0]->repoUrl)->toBe('https://github.com/vendor/pkg');
+    \expect($packages[0]->repoUrl)->toBe('https://github.com/vendor/pkg.git');
 });
 
-\it('uses homepage as repoUrl when source is absent', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'homepage' => 'https://example.com/vendor/pkg'],
-        ]),
-    ]);
+\it('falls back to homepage when source URL is absent', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $completePackage->setHomepage('https://example.com/vendor/pkg');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
     \expect($packages[0]->repoUrl)->toBe('https://example.com/vendor/pkg');
 });
 
-// ---------------------------------------------------------------------------
-// Empty-string output guards
-// ---------------------------------------------------------------------------
+\it('returns empty string when neither source URL nor homepage is set', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-\it('treats empty-string outdated output as no packages for that bump level', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => '',
-        'minor' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.1.0', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([['name' => 'vendor/pkg', 'version' => '1.0.0']]),
-    ]);
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
-
-    \expect($packages)->toHaveCount(1);
-    \expect($packages[0]->patch)->toBeNull();
-    \expect($packages[0]->minor?->version)->toBe('1.1.0');
+    \expect($packages[0]->repoUrl)->toBe('');
 });
 
-\it('treats empty-string show output as missing meta (empty repoUrl)', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => \outdatedJson([
-            ['name' => 'vendor/pkg', 'version' => '1.0.0', 'latest' => '1.0.1', 'latest-status' => 'semver-safe-update', 'abandoned' => false],
-        ]),
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => '',
-    ]);
+\it('returns empty repoUrl for a non-CompletePackage without a source URL', function (): void {
+    $vp        = new VersionParser();
+    // Package (not CompletePackage) does not implement CompletePackageInterface,
+    // so the sourceUrl helper falls through to the bare `return ''` at the end.
+    $installed = new \Composer\Package\Package('vendor/pkg', $vp->normalize('1.0.0'), '1.0.0');
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.1');
 
-    $packages = (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve();
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn([$installed]);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getRequires')->andReturn(['vendor/pkg' => \Mockery::mock(Link::class)]);
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn([]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(false);
+
+    $composer = \Mockery::mock(Composer::class);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
+
+    $packages = (new PackageResolver($composer, \makeVersionSet([$completePackage])))->resolve();
 
     \expect($packages)->toHaveCount(1);
     \expect($packages[0]->repoUrl)->toBe('');
 });
 
 // ---------------------------------------------------------------------------
-// Error handling
+// current / currentRaw
 // ---------------------------------------------------------------------------
 
-\it('throws RuntimeException when a composer command fails', function (): void {
-    $failProcess = \mockProcess(false, '', 'connection refused');
+\it('strips leading v from current version display', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', 'v1.2.3');
+    $available = \makeInstalledPackage('vendor/pkg', 'v1.2.4');
 
-    $mock = \Mockery::mock(ProcessExecutor::class);
-    $mock->shouldReceive('executeAsync')
-        ->andReturn(\React\Promise\resolve($failProcess))
-    ;
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
 
-    \expect(static fn (): array => (new PackageResolver(\mockComposerForResolver(), $mock))->resolve())
-        ->toThrow(\RuntimeException::class, 'connection refused')
-    ;
-});
-
-\it('throws RuntimeException when a promise rejects', function (): void {
-    $mock = \Mockery::mock(ProcessExecutor::class);
-    $mock->shouldReceive('executeAsync')
-        ->andReturnUsing(static fn(): PromiseInterface => \React\Promise\reject(new \RuntimeException('connection lost')))
-    ;
-
-    \expect(static fn (): array => (new PackageResolver(\mockComposerForResolver(), $mock))->resolve())
-        ->toThrow(\RuntimeException::class, 'One or more composer commands failed')
-    ;
-});
-
-\it('throws JsonException when outdated output is invalid JSON', function (): void {
-    $processExecutor = \mockProcessExecutor([
-        'patch' => 'not-valid-json',
-        'minor' => \outdatedJson([]),
-        'major' => \outdatedJson([]),
-        'show'  => \showJson([]),
-    ]);
-
-    \expect(static fn (): array => (new PackageResolver(\mockComposerForResolver(), $processExecutor))->resolve())
-        ->toThrow(\JsonException::class)
-    ;
+    \expect($packages[0]->current)->toBe('1.2.3');
+    \expect($packages[0]->currentRaw)->toBe('v1.2.3');
 });

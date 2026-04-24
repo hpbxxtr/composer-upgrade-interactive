@@ -8,6 +8,7 @@ use function mb_str_pad;
 use function mb_strlen;
 use function preg_replace;
 use function str_repeat;
+use function str_starts_with;
 
 use const STR_PAD_LEFT;
 use const STR_PAD_RIGHT;
@@ -67,6 +68,13 @@ final class Str
     {
         // @phpstan-ignore symplify.forbiddenFuncCall (Avoid using symfony/string)
         return preg_replace($pattern, $replacement, $string) ?? $string;
+    }
+
+    // @phpstan-ignore brnshkr.boolishPrefix (conventional name for this utility — prefix rules don't apply to generic string helpers)
+    public static function startsWith(string $string, string $needle): bool
+    {
+        // @phpstan-ignore symplify.forbiddenFuncCall (Avoid using symfony/string)
+        return str_starts_with($string, $needle);
     }
 
     /**
