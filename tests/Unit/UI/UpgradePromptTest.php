@@ -537,6 +537,20 @@ afterEach(function (): void {
     \expect($prompt->isPickerActive)->toBeFalse();
 });
 
+\it('pressing v with a negative activeCol leaves picker inactive', function (): void {
+    // activeCol = -1 → min(-1, count-1) = -1 → $bumps[-1] is undefined → bumpType === null → early return
+    Prompt::fake(['v', "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldNotReceive('resolve');
+
+    $prompt           = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->activeCol = -1;
+    $prompt->prompt();
+
+    \expect($prompt->isPickerActive)->toBeFalse();
+});
+
 // ---------------------------------------------------------------------------
 // Patch and Major picker via v key
 // ---------------------------------------------------------------------------

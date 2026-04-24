@@ -5,117 +5,98 @@ declare(strict_types=1);
 namespace Hpbxxtr\UpgradeInteractive\Resolver;
 
 use Composer\Composer;
-use Composer\Util\ProcessExecutor;
+use Composer\Package\BasePackage;
+use Composer\Package\CompletePackageInterface;
+use Composer\Package\PackageInterface;
+use Composer\Package\Version\VersionSelector;
+use Composer\Pcre\Preg;
+use Composer\Repository\CompositeRepository;
+use Composer\Repository\PlatformRepository;
+use Composer\Repository\RepositorySet;
 use Hpbxxtr\UpgradeInteractive\Core\Str;
 use Override;
 use RuntimeException;
-use Symfony\Component\Process\Process;
-use Throwable;
 
-use function array_column;
-use function array_combine;
-use function array_filter;
 use function array_flip;
 use function array_keys;
-use function array_values;
-use function implode;
-use function is_array;
-use function is_string;
-use function json_decode;
+use function array_merge;
+use function substr_count;
 use function usort;
-
-use const JSON_THROW_ON_ERROR;
-use const PHP_EOL;
 
 /**
  * @internal Hpbxxtr\UpgradeInteractive
- *
- * @phpstan-type OutdatedEntry array{
- *     name: string,
- *     version: string,
- *     latest: string,
- *     'latest-status': string,
- *     abandoned: bool|string,
- * }
- * @phpstan-type ShowEntry array{
- *     name: string,
- *     version: string,
- *     source?: array{url: string, ...}|string,
- *     homepage?: string,
- * }
  */
 final readonly class PackageResolver implements PackageResolverInterface
 {
+    /**
+     * @param RepositorySet|null    $repositorySet  Injected for testing; built from Composer in production.
+     * @param PlatformRepository|null $platformRepository Injected for testing; built from config in production.
+     */
     public function __construct(
         private Composer $composer,
-        private ProcessExecutor $processExecutor,
+        private ?RepositorySet $repositorySet = null,
+        private ?PlatformRepository $platformRepository = null,
     ) {}
 
     /**
      * @return list<OutdatedPackage>
-     *
-     * @throws RuntimeException
-     * @throws \JsonException
-     * @throws \ValueError
      */
     #[Override]
     public function resolve(): array
     {
-        ['patch' => $patchJson, 'minor' => $minorJson, 'major' => $majorJson, 'show' => $showJson]
-            = $this->fetchParallel();
+        $rootPackage  = $this->composer->getPackage();
+        $devSet   = array_flip(array_keys($rootPackage->getDevRequires()));
+        $directSet = array_flip(array_merge(
+            array_keys($rootPackage->getRequires()),
+            array_keys($rootPackage->getDevRequires()),
+        ));
 
-        $patchMap = $this->parseOutdatedMap($patchJson);
-        $minorMap = $this->parseOutdatedMap($minorJson);
-        $majorMap = $this->parseOutdatedMap($majorJson);
+        $repoSet      = $this->repositorySet ?? $this->buildRepositorySet();
+        $platformRepo = $this->platformRepository ?? ($this->repositorySet instanceof RepositorySet ? null : $this->buildPlatformRepo());
+        $versionSelector     = new VersionSelector($repoSet, $platformRepo);
 
-        // Merge all three maps; + keeps the first occurrence of each key and gives unique names.
-        $merged = $patchMap + $minorMap + $majorMap;
+        $stability        = $rootPackage->getMinimumStability();
+        $stabilityFlags   = $rootPackage->getStabilityFlags();
+        $isPreferStable   = $rootPackage->getPreferStable();
 
-        if ($merged === []) {
-            return [];
-        }
-
-        $devSet  = array_flip(array_keys($this->composer->getPackage()->getDevRequires()));
-        $metaMap = $this->parseMetaMap($showJson, $devSet);
         $entries = [];
 
-        foreach ($merged as $name => $ref) {
-            $currentRaw = $ref['version'];
+        foreach ($this->composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
+            $name = $basePackage->getName();
 
-            $patchTarget = (isset($patchMap[$name]) && $patchMap[$name]['latest-status'] !== 'up-to-date')
-                ? VersionTarget::fromRaw($patchMap[$name]['latest']) : null;
-            $minorTarget = (isset($minorMap[$name]) && $minorMap[$name]['latest-status'] !== 'up-to-date')
-                ? VersionTarget::fromRaw($minorMap[$name]['latest']) : null;
-            $majorTarget = (isset($majorMap[$name]) && $majorMap[$name]['latest-status'] !== 'up-to-date')
-                ? VersionTarget::fromRaw($majorMap[$name]['latest']) : null;
-
-            // Deduplicate: same version reported across adjacent bump levels
-            if ($patchTarget instanceof VersionTarget && $minorTarget instanceof VersionTarget && $patchTarget->version === $minorTarget->version) {
-                $minorTarget = null;
+            // Direct dependencies only (replicates `composer outdated -D`)
+            if (!isset($directSet[$name])) {
+                continue;
             }
 
-            if ($minorTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $minorTarget->version === $majorTarget->version) {
-                $minorTarget = null;
+            $pkgStability = $stability;
+            if (isset($stabilityFlags[$name])) {
+                $found = array_search($stabilityFlags[$name], BasePackage::STABILITIES, true);
+                $pkgStability = is_string($found) ? $found : $stability;
             }
 
-            // Deduplicate: patch and major reporting the same version (minor already nulled)
-            if ($patchTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $patchTarget->version === $majorTarget->version) {
-                $majorTarget = null;
-            }
+            $bestStability = $isPreferStable ? $basePackage->getStability() : $pkgStability;
 
-            $meta      = $metaMap[$name] ?? ['repoUrl' => '', 'isDev' => isset($devSet[$name])];
-            $abandoned = $ref['abandoned'];
+            [$patchTarget, $minorTarget, $majorTarget] = $this->findTargets(
+                $versionSelector,
+                $basePackage,
+                $bestStability,
+            );
+
+            if ($patchTarget === null && $minorTarget === null && $majorTarget === null) {
+                continue;
+            }
 
             $entries[] = new OutdatedPackage(
                 name: $name,
-                current: Str::trimStart($currentRaw, 'v'),
-                currentRaw: $currentRaw,
+                current: Str::trimStart($basePackage->getPrettyVersion(), 'v'),
+                currentRaw: $basePackage->getPrettyVersion(),
                 patch: $patchTarget,
                 minor: $minorTarget,
                 major: $majorTarget,
-                isDev: $meta['isDev'],
-                repoUrl: $meta['repoUrl'],
-                abandonedBy: $abandoned === false ? null : (is_string($abandoned) ? $abandoned : ''),
+                isDev: isset($devSet[$name]),
+                repoUrl: $this->sourceUrl($basePackage),
+                abandonedBy: $this->abandonedBy($basePackage),
             );
         }
 
@@ -128,115 +109,126 @@ final readonly class PackageResolver implements PackageResolverInterface
     }
 
     /**
-     * Fires all four composer commands in parallel via ProcessExecutor::executeAsync()
-     * and drives them to completion through Composer's event loop.
+     * Returns [patchTarget, minorTarget, majorTarget], each null when no upgrade available.
      *
-     * @return array{patch: string, minor: string, major: string, show: string}
-     *
+     * @return array{VersionTarget|null, VersionTarget|null, VersionTarget|null}
+     */
+    private function findTargets(VersionSelector $versionSelector, PackageInterface $package, string $bestStability): array
+    {
+        $version = $package->getVersion();
+
+        // Dev-branch packages: look for newer commits on the same branch only (no major bump).
+        if (Str::startsWith($version, 'dev-')) {
+            $candidate = $versionSelector->findBestCandidate($package->getName(), $version, $bestStability);
+            $target    = ($candidate !== false && $candidate->getVersion() !== $version)
+                ? VersionTarget::fromRaw($candidate->getPrettyVersion())
+                : null;
+
+            return [null, $target, null];
+        }
+
+        $patchTarget = $this->candidateTarget($versionSelector, $package->getName(), $this->computePatchConstraint($version), $version, $bestStability);
+        $minorTarget = $this->candidateTarget($versionSelector, $package->getName(), '^' . $version, $version, $bestStability);
+        $majorConstraint = $this->computeMajorConstraint($version);
+        $majorTarget = $majorConstraint !== null
+            ? $this->candidateTarget($versionSelector, $package->getName(), $majorConstraint, $version, $bestStability)
+            : null;
+
+        // Deduplicate: same version reported across adjacent bump levels.
+        if ($patchTarget instanceof VersionTarget && $minorTarget instanceof VersionTarget && $patchTarget->version === $minorTarget->version) {
+            $minorTarget = null;
+        }
+
+        if ($minorTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $minorTarget->version === $majorTarget->version) {
+            $minorTarget = null;
+        }
+
+        if ($patchTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $patchTarget->version === $majorTarget->version) {
+            $majorTarget = null;
+        }
+
+        return [$patchTarget, $minorTarget, $majorTarget];
+    }
+
+    private function candidateTarget(VersionSelector $versionSelector, string $name, string $constraint, string $installedVersion, string $bestStability): ?VersionTarget
+    {
+        $candidate = $versionSelector->findBestCandidate($name, $constraint, $bestStability);
+
+        if ($candidate === false || $candidate->getVersion() === $installedVersion) {
+            return null;
+        }
+
+        return VersionTarget::fromRaw($candidate->getPrettyVersion());
+    }
+
+    /**
+     * Tilde constraint for patch-level upgrades — mirrors ShowCommand's --patch-only logic.
+     */
+    private function computePatchConstraint(string $version): string
+    {
+        $trimmed     = Preg::replace('{(\.0)+$}D', '', $version);
+        $partsNeeded = Str::startsWith($trimmed, '0') ? 4 : 3;
+
+        while (substr_count($trimmed, '.') + 1 < $partsNeeded) {
+            $trimmed .= '.0';
+        }
+
+        return '~' . $trimmed;
+    }
+
+    /**
+     * Constraint targeting the next major version — mirrors ShowCommand's --major-only logic.
+     */
+    private function computeMajorConstraint(string $version): ?string
+    {
+        if (!Preg::isMatch('{^(?P<zero_major>(?:0\.)+)?(?P<first_meaningful>\d+)\.}', $version, $match)) {
+            return null;
+        }
+
+        return '>=' . $match['zero_major'] . (((int) $match['first_meaningful']) + 1) . ',<9999999-dev';
+    }
+
+    private function sourceUrl(PackageInterface $package): string
+    {
+        $url = $package->getSourceUrl();
+
+        if ($url !== null && $url !== '') {
+            return $url;
+        }
+
+        if ($package instanceof CompletePackageInterface) {
+            return $package->getHomepage() ?? '';
+        }
+
+        return '';
+    }
+
+    private function abandonedBy(PackageInterface $package): ?string
+    {
+        if (!($package instanceof CompletePackageInterface) || !$package->isAbandoned()) {
+            return null;
+        }
+
+        return $package->getReplacementPackage() ?? '';
+    }
+
+    private function buildRepositorySet(): RepositorySet
+    {
+        $rootPackage = $this->composer->getPackage();
+        $repositorySet     = new RepositorySet($rootPackage->getMinimumStability(), $rootPackage->getStabilityFlags());
+        $repositorySet->addRepository(new CompositeRepository($this->composer->getRepositoryManager()->getRepositories()));
+
+        return $repositorySet;
+    }
+
+    /**
      * @throws RuntimeException
      */
-    private function fetchParallel(): array
+    private function buildPlatformRepo(): PlatformRepository
     {
-        $outputs = ['patch' => '', 'minor' => '', 'major' => '', 'show' => ''];
+        /** @var array<string, string> $overrides */
+        $overrides = $this->composer->getConfig()->get('platform') ?: [];
 
-        $commands = [
-            'patch' => 'composer outdated -D --patch-only --format=json --no-interaction',
-            'minor' => 'composer outdated -D --minor-only --format=json --no-interaction',
-            'major' => 'composer outdated -D --major-only --format=json --no-interaction',
-            'show'  => 'composer show --format=json --no-interaction',
-        ];
-
-        $errors   = [];
-        $promises = [];
-
-        foreach ($commands as $key => $cmd) {
-            $promises[] = $this->processExecutor->executeAsync($cmd)
-                ->then(
-                    static function (Process $process) use (&$outputs, &$errors, $key): void {
-                        if (!$process->isSuccessful()) {
-                            $errors[$key] = Str::trim($process->getErrorOutput() ?: $process->getOutput());
-
-                            return;
-                        }
-
-                        $outputs[$key] = $process->getOutput();
-                    },
-                    static function (Throwable $throwable) use (&$errors, $key): void {
-                        $errors[$key] = $throwable->getMessage();
-                    },
-                )
-            ;
-        }
-
-        $this->composer->getLoop()->wait($promises);
-
-        if ($errors !== []) {
-            throw new RuntimeException(
-                'One or more composer commands failed:' . PHP_EOL . implode(PHP_EOL, $errors),
-            );
-        }
-
-        return $outputs;
-    }
-
-    /**
-     * @return array<string, OutdatedEntry>
-     *
-     * @throws \JsonException
-     * @throws \ValueError
-     */
-    private function parseOutdatedMap(string $json): array
-    {
-        if ($json === '') {
-            return [];
-        }
-
-        /** @var array{installed?: list<OutdatedEntry>} $decoded */
-        $decoded  = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        $filtered = array_filter(
-            $decoded['installed'] ?? [],
-            static fn (array $pkg): bool => $pkg['latest-status'] !== 'up-to-date'
-                || $pkg['abandoned'] !== false,
-        );
-
-        return array_combine(
-            array_column($filtered, 'name'),
-            array_values($filtered),
-        );
-    }
-
-    /**
-     * @param array<string, int> $devSet pre-computed flip of dev-require names
-     *
-     * @return array<string, array{repoUrl: string, isDev: bool}>
-     *
-     * @throws \JsonException
-     */
-    private function parseMetaMap(string $json, array $devSet): array
-    {
-        if ($json === '') {
-            return [];
-        }
-
-        /** @var array{installed?: list<ShowEntry>} $decoded */
-        $decoded = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
-        $map     = [];
-
-        foreach ($decoded['installed'] ?? [] as $pkg) {
-            $src = $pkg['source'] ?? null;
-
-            $sourceUrl = match (true) {
-                is_string($src) => $src,
-                is_array($src)  => $src['url'],
-                default         => $pkg['homepage'] ?? '',
-            };
-
-            $map[$pkg['name']] = [
-                'repoUrl' => $sourceUrl,
-                'isDev'   => isset($devSet[$pkg['name']]),
-            ];
-        }
-
-        return $map;
+        return new PlatformRepository([], $overrides);
     }
 }

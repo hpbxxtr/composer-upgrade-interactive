@@ -61,7 +61,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
             } else {
                 $composer        = $this->requireComposer();
                 $processExecutor = $composer->getLoop()->getProcessExecutor() ?? new ProcessExecutor($this->getIO());
-                $entries         = (new PackageResolver($composer, $processExecutor))->resolve();
+                $entries         = (new PackageResolver($composer))->resolve();
             }
         } catch (\Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
