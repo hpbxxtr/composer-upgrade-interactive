@@ -10,6 +10,7 @@ use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityChecker;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
@@ -82,7 +83,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         $ui = $this->interactiveUI ?? new InteractiveUI(
-            $processExecutor instanceof \Composer\Util\ProcessExecutor ? new AvailableVersionsResolver($processExecutor) : null,
+            availableVersionsResolver: $processExecutor instanceof \Composer\Util\ProcessExecutor
+                ? new AvailableVersionsResolver($processExecutor)
+                : null,
+            compatibilityChecker: isset($composer) ? new CompatibilityChecker($composer) : null,
         );
 
         $selections = $ui->ask($entries);

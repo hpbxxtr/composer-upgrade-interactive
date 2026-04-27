@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
@@ -777,5 +779,138 @@ afterEach(function (): void {
     $prompt->prompt();
 
     \expect($prompt->value())->toBe([]);
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility checker — conflictMap and pickerVersionCompatibility
+// ---------------------------------------------------------------------------
+
+\it('conflictMap is initially empty', function (): void {
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+
+    \expect($prompt->conflictMap->isEmpty())->toBeTrue();
+});
+
+\it('conflictMap stays empty after selection when no checker is injected', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    \expect($prompt->conflictMap->isEmpty())->toBeTrue();
+});
+
+\it('conflictMap is updated after toggleSelection when checker is injected', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    // After selecting pkg, recomputeConflictMap calls checkCandidate for the minor target
+    // otherSelections is empty (only one package), so it's called with []
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', \Mockery::type(VersionTarget::class), [])
+        ->andReturn([]);
+
+    $prompt = new UpgradePrompt([$outdatedPackage], compatibilityChecker: $mock);
+    $prompt->prompt();
+
+    // conflictMap is no longer empty — it now has data for vendor/pkg
+    \expect($prompt->conflictMap->isEmpty())->toBeFalse();
+});
+
+\it('conflictMap marks a version as conflicting when checker returns a conflict reason', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg-a', '1.0.0', '2.0.0');
+    $pkgB = \outdatedPackageWithMinor('vendor/pkg-b', '1.0.0', '1.5.0');
+
+    $conflictReason = new ConflictReason(
+        dependentPackage: 'vendor/pkg-a',
+        dependentVersion: '2.0.0',
+        requiredPackage: 'vendor/pkg-b',
+        requiredConstraint: '^1.0',
+        selectedVersion: '1.5.0',
+    );
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    // When pkg-a is selected, checker is called for each target — returns empty (no other selections yet)
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg-a', \Mockery::type(VersionTarget::class), \Mockery::type('array'))
+        ->andReturn([]);
+    // For pkg-b with pkg-a in otherSelections, return the conflict
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg-b', \Mockery::type(VersionTarget::class), \Mockery::type('array'))
+        ->andReturn([$conflictReason]);
+
+    $prompt = new UpgradePrompt([$outdatedPackage, $pkgB], compatibilityChecker: $mock);
+    $prompt->prompt();
+
+    \expect($prompt->conflictMap->isCompatible('vendor/pkg-b', '1.5.0'))->toBeFalse();
+    \expect($prompt->conflictMap->conflictsFor('vendor/pkg-b', '1.5.0'))->toHaveCount(1);
+});
+
+\it('conflictMap is recomputed after pickerSelect', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', \Mockery::type(VersionTarget::class), \Mockery::type('array'))
+        ->andReturn([]);
+
+    $versionResolver = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $versionResolver->shouldReceive('resolve')->once()->andReturn([VersionTarget::fromRaw('1.3.1')]);
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        availableVersionsResolver: $versionResolver,
+        compatibilityChecker: $mock,
+    );
+    $prompt->prompt();
+
+    // After pickerSelect, recomputeConflictMap was called
+    \expect($prompt->conflictMap->isEmpty())->toBeFalse();
+});
+
+\it('pickerVersionCompatibility is populated when picker opens with a checker', function (): void {
+    Prompt::fake(['v', Key::ESCAPE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+
+    $versionTarget = VersionTarget::fromRaw('1.3.1');
+    $v2 = VersionTarget::fromRaw('1.3.0');
+
+    $conflictReason = new ConflictReason(
+        dependentPackage: 'vendor/pkg',
+        dependentVersion: '1.3.1',
+        requiredPackage: 'vendor/other',
+        requiredConstraint: '^1.2',
+        selectedVersion: '1.3.1',
+    );
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    // 1.3.1 is incompatible, 1.3.0 is compatible
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', $versionTarget, [])
+        ->andReturn([$conflictReason]);
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', $v2, [])
+        ->andReturn([]);
+
+    $versionResolver = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $versionResolver->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v2]);
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        availableVersionsResolver: $versionResolver,
+        compatibilityChecker: $mock,
+    );
+    $prompt->prompt();
+
+    \expect($prompt->pickerVersionCompatibility['1.3.1'])->toBeFalse();
+    \expect($prompt->pickerVersionCompatibility['1.3.0'])->toBeTrue();
 });
 

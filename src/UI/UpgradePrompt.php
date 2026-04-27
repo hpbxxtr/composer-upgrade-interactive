@@ -6,6 +6,8 @@ namespace Hpbxxtr\UpgradeInteractive\UI;
 
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
@@ -14,8 +16,10 @@ use Laravel\Prompts\Prompt;
 use Override;
 
 use function array_fill_keys;
+use function array_filter;
 use function array_map;
 use function array_reverse;
+use function array_values;
 use function count;
 use function explode;
 use function in_array;
@@ -47,6 +51,11 @@ final class UpgradePrompt extends Prompt
 
     public ?BumpType $pickerBumpType = null;
 
+    public ConflictMap $conflictMap;
+
+    /** @var array<string, bool> versionRaw → isCompatible */
+    public array $pickerVersionCompatibility = [];
+
     private ?string $pickerPackageName = null;
 
     private ?VersionSelection $versionSelection = null;
@@ -58,10 +67,12 @@ final class UpgradePrompt extends Prompt
         public readonly array                                $entries,
         public readonly string                               $label = 'Select versions to update',
         private readonly ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
+        private readonly ?CompatibilityCheckerInterface      $compatibilityChecker = null,
     ) {
         self::$themes['default'][self::class] = UpgradePromptRenderer::class;
 
         $this->required = false;
+        $this->conflictMap = ConflictMap::empty();
 
         $this->selections = array_fill_keys(
             array_map(static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name, $entries),
@@ -178,6 +189,8 @@ final class UpgradePrompt extends Prompt
 
             $this->selections[$entry->name] = new VersionSelection($col, $target);
         }
+
+        $this->recomputeConflictMap();
     }
 
     private function openPicker(): void
@@ -221,6 +234,27 @@ final class UpgradePrompt extends Prompt
         [$this->pickerCol, $this->pickerRow] = ($existing !== null && $existing->column === $bumpType)
             ? $this->findVersionPosition($pickerCols, $existing->target->versionRaw)
             : $this->defaultPosition($pickerCols);
+
+        if ($this->compatibilityChecker instanceof CompatibilityCheckerInterface) {
+            /** @var array<string, VersionSelection> $otherSelections */
+            $otherSelections = array_filter(
+                $this->selections,
+                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection && $k !== $entry->name,
+                ARRAY_FILTER_USE_BOTH,
+            );
+
+            $this->pickerVersionCompatibility = [];
+
+            foreach ($versions as $version) {
+                try {
+                    $pickerConflicts = $this->compatibilityChecker->checkCandidate($entry->name, $version, $otherSelections);
+                } catch (\UnexpectedValueException) {
+                    $pickerConflicts = [];
+                }
+
+                $this->pickerVersionCompatibility[$version->versionRaw] = ($pickerConflicts === []);
+            }
+        }
 
         $this->isPickerActive = true;
     }
@@ -278,6 +312,7 @@ final class UpgradePrompt extends Prompt
 
         $this->selections[$this->pickerPackageName] = new VersionSelection($this->pickerBumpType, $row);
         $this->closePicker();
+        $this->recomputeConflictMap();
     }
 
     private function pickerCancel(): void
@@ -310,6 +345,76 @@ final class UpgradePrompt extends Prompt
         );
 
         $this->submit();
+    }
+
+    private function recomputeConflictMap(): void
+    {
+        if (!$this->compatibilityChecker instanceof CompatibilityCheckerInterface) {
+            return;
+        }
+
+        $hasSelections = false;
+
+        foreach ($this->selections as $selection) {
+            if ($selection !== null) {
+                $hasSelections = true;
+
+                break;
+            }
+        }
+
+        if (!$hasSelections) {
+            $this->conflictMap = ConflictMap::empty();
+
+            return;
+        }
+
+        /** @var array<string, array<string, list<\Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason>>> $data */
+        $data = [];
+
+        foreach ($this->entries as $entry) {
+            $name = $entry->name;
+
+            /** @var array<string, VersionSelection> $otherSelections */
+            $otherSelections = array_filter(
+                $this->selections,
+                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection && $k !== $name,
+                ARRAY_FILTER_USE_BOTH,
+            );
+
+            $targets = array_values(array_filter([$entry->patch, $entry->minor, $entry->major]));
+
+            // Include the currently selected version if it came from the picker and differs from all defaults
+            $selected = $this->selections[$name] ?? null;
+
+            if ($selected !== null) {
+                $isAlreadyIncluded = false;
+
+                foreach ($targets as $target) {
+                    if ($target->versionRaw === $selected->target->versionRaw) {
+                        $isAlreadyIncluded = true;
+
+                        break;
+                    }
+                }
+
+                if (!$isAlreadyIncluded) {
+                    $targets[] = $selected->target;
+                }
+            }
+
+            foreach ($targets as $target) {
+                try {
+                    $conflicts = $this->compatibilityChecker->checkCandidate($name, $target, $otherSelections);
+                } catch (\UnexpectedValueException) {
+                    $conflicts = [];
+                }
+
+                $data[$name][$target->versionRaw] = $conflicts;
+            }
+        }
+
+        $this->conflictMap = new ConflictMap($data);
     }
 
     /**
