@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Override;
 
@@ -19,6 +20,7 @@ final readonly class InteractiveUI implements InteractiveUIInterface
 {
     public function __construct(
         private ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
+        private ?CompatibilityCheckerInterface $compatibilityChecker = null,
     ) {}
 
     /**
@@ -29,7 +31,11 @@ final readonly class InteractiveUI implements InteractiveUIInterface
     #[Override]
     public function ask(array $entries): array
     {
-        $upgradePrompt = new UpgradePrompt($entries, availableVersionsResolver: $this->availableVersionsResolver);
+        $upgradePrompt = new UpgradePrompt(
+            $entries,
+            availableVersionsResolver: $this->availableVersionsResolver,
+            compatibilityChecker: $this->compatibilityChecker,
+        );
         $upgradePrompt->prompt();
 
         $result = $upgradePrompt->value();

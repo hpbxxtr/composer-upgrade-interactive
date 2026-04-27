@@ -184,6 +184,17 @@ final class UpgradePromptRenderer extends Renderer
             $footerLines[] = $indent . self::ANSI_YELLOW . $notice . self::ANSI_RESET;
         }
 
+        $activeSelection        = $upgradePrompt->selections[$activeEntry->name] ?? null;
+        $activeSelectionVersion = $activeSelection?->target->versionRaw ?? '';
+
+        foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $activeSelectionVersion) as $reason) {
+            $footerLines[] = $indent . self::ANSI_YELLOW
+                . '! ' . $reason->dependentPackage . ' ' . $reason->dependentVersion
+                . ' requires ' . $reason->requiredPackage . ' ' . $reason->requiredConstraint
+                . ' — selected: ' . $reason->selectedVersion
+                . self::ANSI_RESET;
+        }
+
         if ($footerLines !== []) {
             $this->line('');
 
@@ -251,7 +262,7 @@ final class UpgradePromptRenderer extends Renderer
         }
 
         $cols = implode($sep, array_map(
-            function (BumpType $bumpType) use ($outdatedPackage, $focusedBump, $selectedK, $colW): string {
+            function (BumpType $bumpType) use ($upgradePrompt, $outdatedPackage, $focusedBump, $selectedK, $colW): string {
                 $target = $outdatedPackage->target($bumpType);
 
                 if (!$target instanceof VersionTarget) {
@@ -266,11 +277,28 @@ final class UpgradePromptRenderer extends Renderer
                     : $target->version;
                 $color      = self::BUMP_COLOR[$bumpType->value];
 
+                $versionRaw   = $selectedK !== null && $selectedK->column === $bumpType
+                    ? $selectedK->target->versionRaw
+                    : $target->versionRaw;
+                $isCompatible = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $versionRaw);
+
                 $text = match (true) {
-                    $isFocused && $isSelected => self::ANSI_BG_BLUE . self::ANSI_WHITE . self::ANSI_BOLD . '◉ ' . $ver . self::ANSI_RESET,
-                    $isFocused                => self::ANSI_BG_BLUE . self::ANSI_WHITE . '◯ ' . $ver . self::ANSI_RESET,
-                    $isSelected               => self::ANSI_GREEN . self::ANSI_BOLD . '◉' . self::ANSI_RESET . ' ' . $color . $ver . self::ANSI_RESET,
-                    default                   => $this->dimStr('◯') . ' ' . $color . $ver . self::ANSI_RESET,
+                    $isFocused && $isSelected && !$isCompatible
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . self::ANSI_BOLD . '◉!' . $ver . self::ANSI_RESET,
+                    $isFocused && $isSelected
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . self::ANSI_BOLD . '◉ ' . $ver . self::ANSI_RESET,
+                    $isFocused && !$isCompatible
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '◯!' . $ver . self::ANSI_RESET,
+                    $isFocused
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '◯ ' . $ver . self::ANSI_RESET,
+                    $isSelected && !$isCompatible
+                        => self::ANSI_GREEN . self::ANSI_BOLD . '◉' . self::ANSI_RESET . self::ANSI_YELLOW . '!' . self::ANSI_RESET . $color . $ver . self::ANSI_RESET,
+                    $isSelected
+                        => self::ANSI_GREEN . self::ANSI_BOLD . '◉' . self::ANSI_RESET . ' ' . $color . $ver . self::ANSI_RESET,
+                    !$isCompatible
+                        => $this->dimStr('◯') . self::ANSI_YELLOW . '!' . self::ANSI_RESET . $color . $ver . self::ANSI_RESET,
+                    default
+                        => $this->dimStr('◯') . ' ' . $color . $ver . self::ANSI_RESET,
                 };
 
                 return $this->visPad($text, $colW + 2);
@@ -355,11 +383,17 @@ final class UpgradePromptRenderer extends Renderer
                     continue;
                 }
 
-                $isCursor = $cIdx === $upgradePrompt->pickerCol && $rowIdx === $upgradePrompt->pickerRow;
-                $suffix   = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
+                $isCursor     = $cIdx === $upgradePrompt->pickerCol && $rowIdx === $upgradePrompt->pickerRow;
+                $suffix       = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
+                $isCompatible = $upgradePrompt->pickerVersionCompatibility[$version->versionRaw] ?? true;
 
-                if ($isCursor) {
+                if ($isCursor && !$isCompatible) {
+                    $text = self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version
+                        . self::ANSI_RESET . ' ' . self::ANSI_DIM . '✗' . self::ANSI_RESET . $suffix;
+                } elseif ($isCursor) {
                     $text = self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version . self::ANSI_RESET . $suffix;
+                } elseif (!$isCompatible) {
+                    $text = '  ' . self::ANSI_DIM . $version->version . ' ✗' . self::ANSI_RESET;
                 } else {
                     $text = '  ' . $this->dimStr($version->version) . $suffix;
                 }

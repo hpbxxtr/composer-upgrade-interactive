@@ -1,6 +1,8 @@
 <?php
 
 declare(strict_types=1);
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 use Hpbxxtr\UpgradeInteractive\UI\UpgradePrompt;
@@ -462,4 +464,204 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
         ->and($stripped)->toContain('1.4.1')
         ->and($stripped)->toContain('1.4.0')
     ;
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: ! markers in main grid
+// ---------------------------------------------------------------------------
+
+\it('renders ! marker on an incompatible (unselected, unfocused) bump column', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state = 'initial';
+    // Mark 1.3.0 as conflicting
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('◯!')
+        ->and($output)->not->toContain('◯ 1.3.0')
+    ;
+});
+
+\it('renders normal circle on a compatible (unselected, unfocused) bump column', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state       = 'initial';
+    $prompt->conflictMap = ConflictMap::empty();
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('◯ 1.3.0')
+        ->and($output)->not->toContain('! 1.3.0')
+    ;
+});
+
+\it('renders ! marker on a selected but conflicting bump column', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state      = 'initial';
+    $prompt->activeRow  = 0;
+    $prompt->activeCol  = 99; // not focused on minor
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Selected + conflicting → "◉!1.3.0" (not "◉ 1.3.0")
+    \expect($output)->toContain('◉!')
+        ->and($output)->not->toContain('◉ 1.3.0')
+    ;
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: ✗ markers in picker
+// ---------------------------------------------------------------------------
+
+\it('renders ✗ on an incompatible version in the picker (not cursor)', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor();
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [
+            VersionTarget::fromRaw('1.3.1'),
+            VersionTarget::fromRaw('1.3.0'),
+        ]),
+    ];
+    $prompt->pickerCol = 0;
+    $prompt->pickerRow = 0; // cursor on 1.3.1
+
+    // 1.3.0 is incompatible
+    $prompt->pickerVersionCompatibility = ['1.3.1' => true, '1.3.0' => false];
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('1.3.0 ✗');
+});
+
+\it('renders ✗ on an incompatible version in the picker when it is the cursor', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor();
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.0')]),
+    ];
+    $prompt->pickerCol = 0;
+    $prompt->pickerRow = 0; // cursor on 1.3.0
+
+    // cursor version is incompatible
+    $prompt->pickerVersionCompatibility = ['1.3.0' => false];
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('▸ 1.3.0')
+        ->and($output)->toContain('✗')
+    ;
+});
+
+\it('renders picker without ✗ when all versions are compatible', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor();
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state          = 'initial';
+    $prompt->isPickerActive = true;
+    $prompt->pickerBumpType = \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor;
+    $prompt->pickerColumns  = [
+        new \Hpbxxtr\UpgradeInteractive\UI\PickerColumn('1.3.x', [VersionTarget::fromRaw('1.3.0')]),
+    ];
+    $prompt->pickerCol = 0;
+    $prompt->pickerRow = 0;
+
+    $prompt->pickerVersionCompatibility = ['1.3.0' => true];
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->not->toContain('✗');
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: conflict footer lines
+// ---------------------------------------------------------------------------
+
+\it('renders conflict footer line when active selection has conflicts', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
+});
+
+\it('does not render conflict footer when conflictMap is empty', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = ConflictMap::empty();
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // No conflict lines starting with "! vendor/"
+    \expect($output)->not->toContain('! vendor/pkg 1.3.0 requires');
 });
