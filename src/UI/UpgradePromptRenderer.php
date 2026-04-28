@@ -184,15 +184,41 @@ final class UpgradePromptRenderer extends Renderer
             $footerLines[] = $indent . self::ANSI_YELLOW . $notice . self::ANSI_RESET;
         }
 
-        $activeSelection        = $upgradePrompt->selections[$activeEntry->name] ?? null;
-        $activeSelectionVersion = $activeSelection?->target->versionRaw ?? '';
+        $hoveredVersionRaw = $footerTarget instanceof VersionTarget ? $footerTarget->versionRaw : '';
 
-        foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $activeSelectionVersion) as $reason) {
-            $footerLines[] = $indent . self::ANSI_YELLOW
-                . '! ' . $reason->dependentPackage . ' ' . $reason->dependentVersion
-                . ' requires ' . $reason->requiredPackage . ' ' . $reason->requiredConstraint
-                . ' — selected: ' . $reason->selectedVersion
-                . self::ANSI_RESET;
+        if ($hoveredVersionRaw === '' && !$upgradePrompt->isPickerActive && $focusedBump !== null) {
+            $hoveredTarget     = $activeEntry->target($focusedBump);
+            $hoveredVersionRaw = $hoveredTarget instanceof VersionTarget ? $hoveredTarget->versionRaw : '';
+        }
+
+        // Phase 1 — static: always show conflicts for every selected version
+        foreach ($upgradePrompt->selections as $pkgName => $selection) {
+            if ($selection === null) {
+                continue;
+            }
+
+            foreach ($upgradePrompt->conflictMap->conflictsFor($pkgName, $selection->target->versionRaw) as $conflictReason) {
+                $footerLines[] = $indent . self::ANSI_YELLOW
+                    . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
+                    . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint
+                    . ' — selected: ' . $conflictReason->selectedVersion
+                    . self::ANSI_RESET;
+            }
+        }
+
+        // Phase 2 — hover: show conflicts for the hovered version unless it is already shown by phase 1
+        $activeSelection        = $upgradePrompt->selections[$activeEntry->name] ?? null;
+        $isHoverSameAsSelection = $activeSelection !== null
+            && $activeSelection->target->versionRaw === $hoveredVersionRaw;
+
+        if (!$isHoverSameAsSelection) {
+            foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $hoveredVersionRaw) as $conflictReason) {
+                $footerLines[] = $indent . self::ANSI_YELLOW
+                    . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
+                    . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint
+                    . ' — selected: ' . $conflictReason->selectedVersion
+                    . self::ANSI_RESET;
+            }
         }
 
         if ($footerLines !== []) {

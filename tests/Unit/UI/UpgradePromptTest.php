@@ -914,3 +914,66 @@ afterEach(function (): void {
     \expect($prompt->pickerVersionCompatibility['1.3.0'])->toBeTrue();
 });
 
+// ---------------------------------------------------------------------------
+// recomputeConflictMap — exception handling
+// ---------------------------------------------------------------------------
+
+\it('recomputeConflictMap treats UnexpectedValueException from checker as no conflicts', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    $mock->shouldReceive('checkCandidate')->andThrow(new \UnexpectedValueException('bad constraint'));
+
+    $prompt = new UpgradePrompt([$outdatedPackage], compatibilityChecker: $mock);
+    $prompt->prompt();
+
+    // Exception caught → conflict treated as empty [] → version considered compatible
+    \expect($prompt->conflictMap->isCompatible('vendor/pkg', '1.3.0'))->toBeTrue();
+});
+
+// ---------------------------------------------------------------------------
+// recomputeConflictMap — no-selection early return
+// ---------------------------------------------------------------------------
+
+\it('recomputeConflictMap resets conflictMap to empty when the last selection is cleared', function (): void {
+    // SPACE once selects (triggers recompute with one selection)
+    // SPACE again deselects (triggers recompute with zero selections)
+    Prompt::fake([Key::SPACE, Key::SPACE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    $mock->shouldReceive('checkCandidate')->andReturn([]);
+
+    $prompt = new UpgradePrompt([$outdatedPackage], compatibilityChecker: $mock);
+    $prompt->prompt();
+
+    // After deselecting the only package, conflictMap is reset to empty
+    \expect($prompt->conflictMap->isEmpty())->toBeTrue();
+});
+
+// ---------------------------------------------------------------------------
+// openPicker — exception handling
+// ---------------------------------------------------------------------------
+
+\it('openPicker treats UnexpectedValueException from checker as compatible for that version', function (): void {
+    $versions = [VersionTarget::fromRaw('1.3.0')];
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->andReturn($versions);
+
+    $checker = \Mockery::mock(CompatibilityCheckerInterface::class);
+    $checker->shouldReceive('checkCandidate')->andThrow(new \UnexpectedValueException('bad'));
+
+    Prompt::fake(['v', "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock, compatibilityChecker: $checker);
+    $prompt->prompt();
+
+    // Exception caught → pickerConflicts = [] → version treated as compatible
+    \expect($prompt->pickerVersionCompatibility['1.3.0'] ?? null)->toBeTrue();
+});
+
