@@ -643,6 +643,97 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
     \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
 });
 
+\it('renders conflict footer line when hovering an incompatible version without a selection', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    // No selection — just hovering the minor column (only available bump, so activeCol 0 → minor)
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: selected-but-not-focused column rendering (lines 299, 301)
+// ---------------------------------------------------------------------------
+
+\it('renders ◉! on a selected-but-not-focused incompatible bump column', function (): void {
+    Prompt::fake(["\n"]);
+
+    // Package has both minor and major bumps so the two columns are different
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.0.0',
+        minor: VersionTarget::fromRaw('1.3.0'),
+        major: VersionTarget::fromRaw('2.0.0'),
+    );
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    $prompt->activeCol = 1; // focused on major (index 1 of [minor, major])
+
+    // Selection is on minor
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    // Minor version 1.3.0 is conflicting
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/other', '1.5.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Minor column: selected + not focused + incompatible → ◉! (line 299)
+    \expect($output)->toContain('◉!')
+        ->and($output)->not->toContain('◉ 1.3.0')
+    ;
+});
+
+\it('renders ◉ (space) on a selected-but-not-focused compatible bump column', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.0.0',
+        minor: VersionTarget::fromRaw('1.3.0'),
+        major: VersionTarget::fromRaw('2.0.0'),
+    );
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    $prompt->activeCol = 1; // focused on major
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = ConflictMap::empty(); // no conflicts
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Minor column: selected + not focused + compatible → ◉ 1.3.0 (line 301)
+    \expect($output)->toContain('◉ 1.3.0')
+        ->and($output)->not->toContain('◉!')
+    ;
+});
+
 \it('does not render conflict footer when conflictMap is empty', function (): void {
     Prompt::fake(["\n"]);
 
@@ -664,4 +755,138 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     // No conflict lines starting with "! vendor/"
     \expect($output)->not->toContain('! vendor/pkg 1.3.0 requires');
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: static footer (phase 1) — selection conflicts always visible
+// ---------------------------------------------------------------------------
+
+\it('renders selection conflict in footer even when cursor has moved to a different column', function (): void {
+    Prompt::fake(["\n"]);
+
+    // Package has both minor and major — selection on minor (conflicting), cursor on major
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.0.0',
+        minor: VersionTarget::fromRaw('1.3.0'),
+        major: VersionTarget::fromRaw('2.0.0'),
+    );
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    $prompt->activeCol = 1; // cursor on major column
+
+    // Selection is on minor with a conflict
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Phase 1: selection conflict must appear even though cursor is on major
+    \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
+});
+
+\it('renders conflict footer lines for all selected packages regardless of focused row', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/a', '1.0.0', '1.3.0');
+    $pkgB = \outdatedPackageWithMinor('vendor/b', '2.0.0', '2.1.0');
+    $prompt = new UpgradePrompt([$outdatedPackage, $pkgB]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0; // focused on vendor/a
+
+    $prompt->selections['vendor/a'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+    $prompt->selections['vendor/b'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.1.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/a' => ['1.3.0' => [new ConflictReason('vendor/a', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+        'vendor/b' => ['2.1.0' => [new ConflictReason('vendor/b', '2.1.0', 'vendor/dep', '^2.0', '3.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Both conflict lines must appear even though vendor/b is not the focused row
+    \expect($output)->toContain('! vendor/a 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0')
+        ->and($output)->toContain('! vendor/b 2.1.0 requires vendor/dep ^2.0 — selected: 3.0.0');
+});
+
+\it('renders each conflict exactly once when hovering the selected conflicting version', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    $prompt->activeCol = 0; // cursor on the minor column (same as selection)
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Phase 1 covers it; phase 2 must be skipped — conflict line appears exactly once
+    $conflictLine  = '! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0';
+    $occurrences   = substr_count($output, $conflictLine);
+    \expect($occurrences)->toBe(1);
+});
+
+\it('renders both selection conflict and hover conflict when they are for different versions', function (): void {
+    Prompt::fake(["\n"]);
+
+    // Package has patch (1.0.1, selected + conflicting) and minor (1.3.0, hover + conflicting)
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.0.0',
+        patch: VersionTarget::fromRaw('1.0.1'),
+        minor: VersionTarget::fromRaw('1.3.0'),
+    );
+    $prompt = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+    $prompt->activeCol = 1; // cursor on minor column (index 1 of [patch, minor])
+
+    // Selection is on patch (conflicting)
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Patch,
+        VersionTarget::fromRaw('1.0.1'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '1.0.1' => [new ConflictReason('vendor/pkg', '1.0.1', 'vendor/dep', '^1.0', '2.0.0')],
+            '1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    // Phase 1 shows selected (patch) conflict; phase 2 shows hover (minor) conflict
+    \expect($output)->toContain('! vendor/pkg 1.0.1 requires vendor/dep ^1.0 — selected: 2.0.0')
+        ->and($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
 });

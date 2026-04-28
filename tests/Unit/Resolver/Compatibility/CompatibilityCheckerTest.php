@@ -267,6 +267,29 @@ describe('CompatibilityChecker', function (): void {
         expect($countingRepo->loadPackagesCallCount)->toBe(1);
     });
 
+    // ---------------------------------------------------------------------------
+    // Backward check — unrelated requires are skipped (line 74 continue branch)
+    // ---------------------------------------------------------------------------
+
+    it('does not report a conflict when the selection requires an unrelated dep (not the candidate)', function (): void {
+        // vendor/other requires vendor/unrelated, NOT vendor/pkg — backward check must skip it
+        $completePackage = \makeCheckerPackage('vendor/other', '1.5.0');
+        $completePackage->setRequires(['vendor/unrelated' => \makeLink('vendor/other', 'vendor/unrelated', '^3.0')]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage]),
+        );
+
+        $conflicts = $checker->checkCandidate(
+            'vendor/pkg',
+            VersionTarget::fromRaw('2.0.0'),
+            ['vendor/other' => \sel('1.5.0')],
+        );
+
+        expect($conflicts)->toBe([]);
+    });
+
     it('queries repository separately for different versions of the same package', function (): void {
         $completePackage = \makeCheckerPackage('vendor/pkg', '1.0.0');
         $completePackageTwo = \makeCheckerPackage('vendor/pkg', '2.0.0');
