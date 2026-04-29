@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\Command;
 
+use Composer\Composer;
 use Composer\Command\BaseCommand;
 use Composer\Util\ProcessExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
@@ -66,20 +67,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
                 $processExecutor = $composer->getLoop()->getProcessExecutor() ?? new ProcessExecutor($this->getIO());
                 $entries         = (new PackageResolver($composer))->resolve();
 
-                $rootPackage    = $composer->getPackage();
-                $directDepNames = array_merge(
-                    array_keys($rootPackage->getRequires()),
-                    array_keys($rootPackage->getDevRequires()),
-                );
-                $isDirectDep = array_flip($directDepNames);
-
-                foreach ($composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
-                    if (!isset($isDirectDep[$basePackage->getName()])) {
-                        continue;
-                    }
-
-                    $installedVersions[$basePackage->getName()] = $basePackage->getPrettyVersion();
-                }
+                $installedVersions = self::collectInstalledVersions($composer);
             }
         } catch (Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
@@ -129,5 +117,26 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         return 0;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function collectInstalledVersions(Composer $composer): array
+    {
+        $directDepNames = array_merge(
+            array_keys($composer->getPackage()->getRequires()),
+            array_keys($composer->getPackage()->getDevRequires()),
+        );
+        $isDirectDep = array_flip($directDepNames);
+        $result      = [];
+
+        foreach ($composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
+            if (isset($isDirectDep[$basePackage->getName()])) {
+                $result[$basePackage->getName()] = $basePackage->getPrettyVersion();
+            }
+        }
+
+        return $result;
     }
 }
