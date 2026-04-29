@@ -3,7 +3,9 @@
 declare(strict_types=1);
 
 use Hpbxxtr\UpgradeInteractive\Plugin;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 
 \arch('all classes use strict types')
@@ -32,3 +34,17 @@ use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
     ->expect('Hpbxxtr\UpgradeInteractive\Resolver')
     ->not->toUse('Hpbxxtr\UpgradeInteractive\UI')
     ->not->toUse('Hpbxxtr\UpgradeInteractive\Executor');
+
+\arch('UI layer does not depend on Executor layer')
+    ->expect('Hpbxxtr\UpgradeInteractive\UI')
+    ->not->toUse('Hpbxxtr\UpgradeInteractive\Executor');
+
+\arch('value objects VersionSelection is final and readonly')
+    ->expect(VersionSelection::class)
+    ->toBeFinal()
+    ->toBeReadonly();
+
+\arch('value objects ConflictReason is final and readonly')
+    ->expect(ConflictReason::class)
+    ->toBeFinal()
+    ->toBeReadonly();
