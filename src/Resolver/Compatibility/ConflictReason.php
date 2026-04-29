@@ -17,4 +17,10 @@ final readonly class ConflictReason
         public string $selectedVersion,    // what is actually selected or installed — conflicts with constraint
         public bool $isInstalled = false,  // true when the version comes from the installed repo, not a user selection
     ) {}
+
+    public function format(): string
+    {
+        return $this->dependentPackage . ' ' . $this->dependentVersion
+            . ' requires ' . $this->requiredPackage . ' ' . $this->requiredConstraint;
+    }
 }
