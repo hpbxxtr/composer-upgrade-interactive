@@ -6,14 +6,17 @@ namespace Hpbxxtr\UpgradeInteractive\UI;
 
 use Hpbxxtr\UpgradeInteractive\Core\Str;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\Url\ComposeUrlResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 use Laravel\Prompts\Themes\Default\Renderer;
 
 use function array_map;
+use function array_slice;
 use function count;
 use function implode;
+use function in_array;
 use function max;
 use function min;
 use function range;
@@ -24,6 +27,8 @@ use function sprintf;
  */
 final class UpgradePromptRenderer extends Renderer
 {
+    private const int CONFLICT_FOOTER_MAX = 5;
+
     private const string ANSI_RESET    = "\e[0m";
     private const string ANSI_BOLD     = "\e[1m";
     private const string ANSI_BOLD_OFF = "\e[22m";
@@ -191,34 +196,71 @@ final class UpgradePromptRenderer extends Renderer
             $hoveredVersionRaw = $hoveredTarget instanceof VersionTarget ? $hoveredTarget->versionRaw : '';
         }
 
-        // Phase 1 — static: always show conflicts for every selected version
-        foreach ($upgradePrompt->selections as $pkgName => $selection) {
+        // Collect all conflict lines (both phases) then apply overflow cap
+        /** @var list<string> $conflictLines */
+        $conflictLines = [];
+        /** @var array<string, true> $seenConflicts */
+        $seenConflicts  = [];
+        $updatableNames = array_map(
+            static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name,
+            $upgradePrompt->entries,
+        );
+
+        // Phase 1 — static: conflicts for selected packages other than the active entry,
+        // filtered to exclude any conflict that mentions the active entry (Phase 2 handles those).
+        // Deduplication prevents the same cross-selection conflict from appearing from both sides.
+        foreach ($upgradePrompt->selections as $selPkgName => $selection) {
             if ($selection === null) {
                 continue;
             }
 
-            foreach ($upgradePrompt->conflictMap->conflictsFor($pkgName, $selection->target->versionRaw) as $conflictReason) {
-                $footerLines[] = $indent . self::ANSI_YELLOW
-                    . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
-                    . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint
-                    . ' — selected: ' . $conflictReason->selectedVersion
-                    . self::ANSI_RESET;
+            if ($selPkgName === $activeEntry->name) {
+                continue;
+            }
+
+            foreach ($upgradePrompt->conflictMap->conflictsFor($selPkgName, $selection->target->versionRaw) as $reason) {
+                if ($reason->dependentPackage === $activeEntry->name) {
+                    continue;
+                }
+
+                if ($reason->requiredPackage === $activeEntry->name) {
+                    continue;
+                }
+
+                $line = $this->formatConflictLine($reason, $selPkgName, $updatableNames, $indent);
+
+                if (!isset($seenConflicts[$line])) {
+                    $seenConflicts[$line] = true;
+                    $conflictLines[]      = $line;
+                }
             }
         }
 
-        // Phase 2 — hover: show conflicts for the hovered version unless it is already shown by phase 1
-        $activeSelection        = $upgradePrompt->selections[$activeEntry->name] ?? null;
-        $isHoverSameAsSelection = $activeSelection !== null
-            && $activeSelection->target->versionRaw === $hoveredVersionRaw;
+        // Phase 2 — hover: conflicts for the hovered version of the active entry.
+        // Replaces the active entry's selection conflicts — the user is evaluating this version now.
+        if ($hoveredVersionRaw !== '') {
+            foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $hoveredVersionRaw) as $reason) {
+                $line = $this->formatConflictLine($reason, $activeEntry->name, $updatableNames, $indent);
 
-        if (!$isHoverSameAsSelection) {
-            foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $hoveredVersionRaw) as $conflictReason) {
-                $footerLines[] = $indent . self::ANSI_YELLOW
-                    . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
-                    . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint
-                    . ' — selected: ' . $conflictReason->selectedVersion
-                    . self::ANSI_RESET;
+                if (!isset($seenConflicts[$line])) {
+                    $seenConflicts[$line] = true;
+                    $conflictLines[]      = $line;
+                }
             }
+        }
+
+        // Overflow cap
+        $overflowCount = count($conflictLines) - self::CONFLICT_FOOTER_MAX;
+
+        if ($overflowCount > 0) {
+            $conflictLines   = array_slice($conflictLines, 0, self::CONFLICT_FOOTER_MAX);
+            $conflictLines[] = $indent . $this->dimStr(
+                '… and ' . $overflowCount . ' more conflict' . ($overflowCount > 1 ? 's' : ''),
+            );
+        }
+
+        foreach ($conflictLines as $conflictLine) {
+            $footerLines[] = $conflictLine;
         }
 
         if ($footerLines !== []) {
@@ -453,5 +495,45 @@ final class UpgradePromptRenderer extends Renderer
     private function visPad(string $s, int $width): string
     {
         return $s . Str::repeat(' ', max(0, $width - $this->visLen($s)));
+    }
+
+    /**
+     * Format a single conflict footer line, adapting the suffix to whether the conflict involves
+     * an installed-only package (as opposed to a cross-selection conflict).
+     *
+     * @param list<string> $updatableNames package names that appear in the outdated-packages list
+     */
+    private function formatConflictLine(
+        ConflictReason $conflictReason,
+        string $forPackage,
+        array $updatableNames,
+        string $indent,
+    ): string {
+        $prefix = $indent . self::ANSI_YELLOW
+            . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
+            . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint;
+
+        if (!$conflictReason->isInstalled) {
+            // Case 1: cross-selection conflict (both packages are user selections)
+            return $prefix . ' — selected: ' . $conflictReason->selectedVersion . self::ANSI_RESET;
+        }
+
+        if ($conflictReason->dependentPackage === $forPackage) {
+            // Case 2: forward — candidate requires a dep that is installed-only
+            $isDepUpdatable = in_array($conflictReason->requiredPackage, $updatableNames, true);
+            $suffix         = $isDepUpdatable
+                ? ' — installed: ' . $conflictReason->selectedVersion . ' (update available)'
+                : ' — installed: ' . $conflictReason->selectedVersion;
+
+            return $prefix . $suffix . self::ANSI_RESET;
+        }
+
+        // Case 3: backward — an installed package requires the candidate at a conflicting constraint
+        $isDependentUpdatable = in_array($conflictReason->dependentPackage, $updatableNames, true);
+        $suffix               = $isDependentUpdatable
+            ? ' — installed, update available'
+            : ' — installed, no update available';
+
+        return $prefix . $suffix . self::ANSI_RESET;
     }
 }

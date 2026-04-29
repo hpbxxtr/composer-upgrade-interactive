@@ -914,6 +914,45 @@ afterEach(function (): void {
     \expect($prompt->pickerVersionCompatibility['1.3.0'])->toBeTrue();
 });
 
+\it('conflictMap is enriched with picker version conflict reasons when picker opens', function (): void {
+    Prompt::fake(['v', Key::ESCAPE, "\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
+
+    $versionTarget = VersionTarget::fromRaw('1.3.1');
+    $v2 = VersionTarget::fromRaw('1.3.0');
+
+    $conflictReason = new ConflictReason(
+        dependentPackage: 'vendor/pkg',
+        dependentVersion: '1.3.1',
+        requiredPackage: 'vendor/other',
+        requiredConstraint: '^1.2',
+        selectedVersion: '2.0.0',
+    );
+
+    $mock = \Mockery::mock(CompatibilityCheckerInterface::class);
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', $versionTarget, [])
+        ->andReturn([$conflictReason]);
+    $mock->shouldReceive('checkCandidate')
+        ->with('vendor/pkg', $v2, [])
+        ->andReturn([]);
+
+    $versionResolver = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $versionResolver->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v2]);
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        availableVersionsResolver: $versionResolver,
+        compatibilityChecker: $mock,
+    );
+    $prompt->prompt();
+
+    // Full conflict reasons must be in conflictMap so the footer updates on picker navigation
+    \expect($prompt->conflictMap->conflictsFor('vendor/pkg', '1.3.1'))->toHaveCount(1);
+    \expect($prompt->conflictMap->isCompatible('vendor/pkg', '1.3.0'))->toBeTrue();
+});
+
 // ---------------------------------------------------------------------------
 // recomputeConflictMap — exception handling
 // ---------------------------------------------------------------------------

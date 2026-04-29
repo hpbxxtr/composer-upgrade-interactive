@@ -494,6 +494,40 @@ function mockComposerWithInstalled(array $installedPackages, array $devPackageNa
 // current / currentRaw
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// buildRepositorySet() + buildPlatformRepo() — exercised when neither is injected
+// ---------------------------------------------------------------------------
+
+\it('builds RepositorySet and PlatformRepository from Composer when neither is injected', function (): void {
+    $mock = \Mockery::mock(InstalledRepositoryInterface::class);
+    $mock->shouldReceive('getPackages')->andReturn([]);
+
+    $repositoryManager = \Mockery::mock(RepositoryManager::class);
+    $repositoryManager->shouldReceive('getLocalRepository')->andReturn($mock);
+    $repositoryManager->shouldReceive('getRepositories')->andReturn([]);
+
+    $config = \Mockery::mock(\Composer\Config::class);
+    $config->shouldReceive('get')->andReturn([]);
+
+    $rootPkg = \Mockery::mock(RootPackageInterface::class);
+    $rootPkg->shouldReceive('getDevRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getRequires')->andReturn([]);
+    $rootPkg->shouldReceive('getMinimumStability')->andReturn('stable');
+    $rootPkg->shouldReceive('getStabilityFlags')->andReturn([]);
+    $rootPkg->shouldReceive('getPreferStable')->andReturn(false);
+
+    $composer = \Mockery::mock(Composer::class);
+    $composer->shouldReceive('getPackage')->andReturn($rootPkg);
+    $composer->shouldReceive('getRepositoryManager')->andReturn($repositoryManager);
+    $composer->shouldReceive('getConfig')->andReturn($config);
+
+    // No $repositorySet injected → buildRepositorySet() (lines 216–221) and
+    // buildPlatformRepo() (lines 226–231) are both called.
+    $packages = (new PackageResolver($composer))->resolve();
+
+    \expect($packages)->toBe([]);
+});
+
 \it('strips leading v from current version display', function (): void {
     $completePackage = \makeInstalledPackage('vendor/pkg', 'v1.2.3');
     $available = \makeInstalledPackage('vendor/pkg', 'v1.2.4');

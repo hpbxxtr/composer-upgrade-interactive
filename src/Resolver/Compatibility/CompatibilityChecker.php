@@ -25,11 +25,15 @@ final class CompatibilityChecker implements CompatibilityCheckerInterface
     private readonly RepositorySet $repositorySet;
 
     /**
-     * @param RepositorySet|null $repositorySet  Injected for testing; built from Composer in production.
+     * @param RepositorySet|null        $repositorySet    Injected for testing; built from Composer in production.
+     * @param array<string, string>     $installedVersions name → versionRaw for all installed packages;
+     *                                                     built by the caller from the local Composer repository.
+     *                                                     Defaults to empty (tests and environments without Composer context).
      */
     public function __construct(
         private readonly Composer $composer,
         ?RepositorySet $repositorySet = null,
+        private readonly array $installedVersions = [],
     ) {
         $this->repositorySet = $repositorySet ?? $this->buildRepositorySet();
     }
@@ -47,40 +51,57 @@ final class CompatibilityChecker implements CompatibilityCheckerInterface
     ): array {
         $conflicts = [];
 
-        // Forward: check candidate's requires against selections
+        // Build effective world: installed base + selection overrides, excluding the candidate itself
+        /** @var array<string, string> $effectiveWorld */
+        $effectiveWorld = $this->installedVersions;
+
+        foreach ($selections as $selName => $sel) {
+            $effectiveWorld[$selName] = $sel->target->versionRaw;
+        }
+
+        unset($effectiveWorld[$packageName]);
+
+        // Forward: check candidate's requires against every package in the effective world
         $candidateMeta = $this->fetchMetadata($packageName, $versionTarget->versionRaw);
+
         foreach ($candidateMeta?->getRequires() ?? [] as $depName => $link) {
-            if (!isset($selections[$depName])) {
+            if (!isset($effectiveWorld[$depName])) {
                 continue;
             }
 
-            $selectedVersion = $selections[$depName]->target->versionRaw;
-            if (!Semver::satisfies($selectedVersion, $link->getPrettyConstraint())) {
+            $effectiveVersion = $effectiveWorld[$depName];
+
+            if (!Semver::satisfies($effectiveVersion, $link->getPrettyConstraint())) {
+                $isInstalled = !isset($selections[$depName]);
                 $conflicts[] = new ConflictReason(
                     dependentPackage: $packageName,
                     dependentVersion: $versionTarget->versionRaw,
                     requiredPackage: $depName,
                     requiredConstraint: $link->getPrettyConstraint(),
-                    selectedVersion: $selectedVersion,
+                    selectedVersion: $effectiveVersion,
+                    isInstalled: $isInstalled,
                 );
             }
         }
 
-        // Backward: check each selection's requires against the candidate
-        foreach ($selections as $selName => $sel) {
-            $selMeta = $this->fetchMetadata($selName, $sel->target->versionRaw);
-            foreach ($selMeta?->getRequires() ?? [] as $depName => $link) {
+        // Backward: check every package in the effective world against the candidate
+        foreach ($effectiveWorld as $worldPkgName => $worldPkgVersion) {
+            $isInstalled = !isset($selections[$worldPkgName]);
+            $meta        = $this->fetchMetadata($worldPkgName, $worldPkgVersion);
+
+            foreach ($meta?->getRequires() ?? [] as $depName => $link) {
                 if ($depName !== $packageName) {
                     continue;
                 }
 
                 if (!Semver::satisfies($versionTarget->versionRaw, $link->getPrettyConstraint())) {
                     $conflicts[] = new ConflictReason(
-                        dependentPackage: $selName,
-                        dependentVersion: $sel->target->versionRaw,
+                        dependentPackage: $worldPkgName,
+                        dependentVersion: $worldPkgVersion,
                         requiredPackage: $packageName,
                         requiredConstraint: $link->getPrettyConstraint(),
                         selectedVersion: $versionTarget->versionRaw,
+                        isInstalled: $isInstalled,
                     );
                 }
             }
