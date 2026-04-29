@@ -46,22 +46,16 @@ function makePackage(string $repoUrl, string $current = '1.0.0'): OutdatedPackag
     \expect($urlResult->releaseUrl)->toBeNull();
 });
 
-\it('returns null URLs when setResolvers receives an empty list', function (): void {
-    $resolver = new ComposeUrlResolver(\makePackage('https://github.com/vendor/pkg.git'));
-    $resolver->setResolvers([]);
-
-    $urlResult = $resolver->resolve(BumpType::Minor);
+\it('returns null URLs when constructed with an empty resolver list', function (): void {
+    $urlResult = (new ComposeUrlResolver(\makePackage('https://github.com/vendor/pkg.git'), []))->resolve(BumpType::Minor);
 
     \expect($urlResult->compareUrl)->toBeNull()
         ->and($urlResult->releaseUrl)->toBeNull()
     ;
 });
 
-\it('isMatch returns false when no resolvers match', function (): void {
-    $resolver = new ComposeUrlResolver(\makePackage('https://github.com/vendor/pkg.git'));
-    $resolver->setResolvers([]);
-
-    \expect($resolver->isMatch())->toBeFalse();
+\it('isMatch returns false when constructed with an empty resolver list', function (): void {
+    \expect((new ComposeUrlResolver(\makePackage('https://github.com/vendor/pkg.git'), []))->isMatch())->toBeFalse();
 });
 
 \it('builds the correct GitHub releases URL', function (): void {

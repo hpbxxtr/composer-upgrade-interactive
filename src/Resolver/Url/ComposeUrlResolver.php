@@ -17,25 +17,20 @@ final class ComposeUrlResolver extends AbstractUrlResolver
     /**
      * @var list<UrlResolverInterface>
      */
-    private array $resolvers;
+    private readonly array $resolvers;
 
-    public function __construct(OutdatedPackage $outdatedPackage)
+    /**
+     * @param list<UrlResolverInterface>|null $resolvers  Null uses the default GitHub/GitLab/Packagist chain.
+     */
+    public function __construct(OutdatedPackage $outdatedPackage, ?array $resolvers = null)
     {
         parent::__construct($outdatedPackage);
 
-        $this->resolvers = [
+        $this->resolvers = $resolvers ?? [
             new GithubUrlResolver($outdatedPackage),
             new GitlabUrlResolver($outdatedPackage),
             new PackagistUrlResolver($outdatedPackage),
         ];
-    }
-
-    /**
-     * @param list<UrlResolverInterface> $resolvers
-     */
-    public function setResolvers(array $resolvers): void
-    {
-        $this->resolvers = $resolvers;
     }
 
     #[Override]
