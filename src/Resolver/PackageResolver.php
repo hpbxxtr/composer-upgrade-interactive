@@ -28,6 +28,9 @@ use function usort;
  */
 final readonly class PackageResolver implements PackageResolverInterface
 {
+    /** Mirrors Composer ShowCommand's major-only upper bound sentinel. */
+    private const string MAJOR_UPPER_BOUND = '9999999-dev';
+
     /**
      * @param RepositorySet|null    $repositorySet  Injected for testing; built from Composer in production.
      * @param PlatformRepository|null $platformRepository Injected for testing; built from config in production.
@@ -185,7 +188,7 @@ final readonly class PackageResolver implements PackageResolverInterface
             return null;
         }
 
-        return '>=' . $match['zero_major'] . (((int) $match['first_meaningful']) + 1) . ',<9999999-dev';
+        return '>=' . $match['zero_major'] . (((int) $match['first_meaningful']) + 1) . ',<' . self::MAJOR_UPPER_BOUND;
     }
 
     private function sourceUrl(PackageInterface $package): string

@@ -20,6 +20,8 @@ use const JSON_THROW_ON_ERROR;
  */
 final readonly class AvailableVersionsResolver implements AvailableVersionsResolverInterface
 {
+    private const int JSON_DECODE_DEPTH = 512;
+
     public function __construct(
         private ProcessExecutor $processExecutor,
     ) {}
@@ -48,7 +50,7 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
 
         try {
             /** @var array{versions?: list<string>} $decoded */
-            $decoded = json_decode($output, true, 512, JSON_THROW_ON_ERROR);
+            $decoded = json_decode($output, true, self::JSON_DECODE_DEPTH, JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             return [];
         }
