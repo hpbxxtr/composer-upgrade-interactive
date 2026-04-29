@@ -411,6 +411,22 @@ afterEach(function (): void {
 });
 
 // ---------------------------------------------------------------------------
+// Version cache — second open must not re-resolve
+// ---------------------------------------------------------------------------
+
+\it('pressing v a second time re-uses cached versions without re-calling resolve', function (): void {
+    Prompt::fake(['v', Key::ESCAPE, 'v', Key::CTRL_C]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')
+        ->once() // must not be called a second time after the cache is warm
+        ->andReturn([VersionTarget::fromRaw('1.3.1')]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], availableVersionsResolver: $mock);
+    $prompt->prompt();
+});
+
+// ---------------------------------------------------------------------------
 // Inline picker — cancellation and ESC restore
 // ---------------------------------------------------------------------------
 
@@ -694,7 +710,7 @@ afterEach(function (): void {
     $v0 = VersionTarget::fromRaw('1.3.0');
 
     $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
-    $mock->shouldReceive('resolve')->twice()->andReturn([$versionTarget, $v0]);
+    $mock->shouldReceive('resolve')->once()->andReturn([$versionTarget, $v0]); // second open uses cache
 
     $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0');
     $prompt          = new UpgradePrompt([$outdatedPackage], availableVersionsResolver: $mock);

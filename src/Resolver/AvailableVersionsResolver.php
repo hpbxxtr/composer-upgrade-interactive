@@ -4,59 +4,38 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\Resolver;
 
+use Composer\Composer;
+use Composer\Repository\CompositeRepository;
+use Composer\Repository\RepositorySet;
+use Composer\Semver\Semver;
 use Composer\Semver\VersionParser;
-use Composer\Util\ProcessExecutor;
 use Override;
 use UnexpectedValueException;
 
+use function array_map;
 use function explode;
-use function is_string;
-use function json_decode;
-
-use const JSON_THROW_ON_ERROR;
 
 /**
  * @internal Hpbxxtr\UpgradeInteractive
  */
 final readonly class AvailableVersionsResolver implements AvailableVersionsResolverInterface
 {
-    private const int JSON_DECODE_DEPTH = 512;
-
+    /**
+     * @param RepositorySet|null $repositorySet Injected for testing; built from Composer in production.
+     */
     public function __construct(
-        private ProcessExecutor $processExecutor,
+        private Composer $composer,
+        private ?RepositorySet $repositorySet = null,
     ) {}
 
     /**
      * @return list<VersionTarget>
-     *
-     * @throws \JsonException
      */
     #[Override]
     public function resolve(string $packageName, string $currentVersion, BumpType $bumpType): array
     {
-        $output   = '';
-        $exitCode = $this->processExecutor->execute(
-            'composer show ' . ProcessExecutor::escape($packageName) . ' -a --format=json --no-interaction',
-            $output,
-        );
-
-        if ($exitCode !== 0) {
-            return [];
-        }
-
-        if (!is_string($output) || $output === '') {
-            return [];
-        }
-
-        try {
-            /** @var array{versions?: list<string>} $decoded */
-            $decoded = json_decode($output, true, self::JSON_DECODE_DEPTH, JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return [];
-        }
-
-        $rawVersions = $decoded['versions'] ?? [];
-        $versionParser      = new VersionParser();
+        $repoSet       = $this->repositorySet ?? $this->buildRepositorySet();
+        $versionParser = new VersionParser();
 
         try {
             $curSegments = $this->parseSegments($versionParser, $currentVersion);
@@ -64,9 +43,18 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
             return [];
         }
 
-        $result = [];
+        $seen        = [];
+        $rawVersions = [];
 
-        foreach ($rawVersions as $rawVersion) {
+        foreach ($repoSet->findPackages($packageName) as $basePackage) {
+            $rawVersion = $basePackage->getPrettyVersion();
+
+            if (isset($seen[$rawVersion])) {
+                continue;
+            }
+
+            $seen[$rawVersion] = true;
+
             if (VersionParser::parseStability($rawVersion) !== 'stable') {
                 continue;
             }
@@ -81,10 +69,27 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
                 continue;
             }
 
-            $result[] = VersionTarget::fromRaw($rawVersion);
+            $rawVersions[] = $rawVersion;
         }
 
-        return $result;
+        return array_map(
+            VersionTarget::fromRaw(...),
+            Semver::rsort($rawVersions),
+        );
+    }
+
+    private function buildRepositorySet(): RepositorySet
+    {
+        $rootPackage   = $this->composer->getPackage();
+        $repositorySet = new RepositorySet(
+            $rootPackage->getMinimumStability(),
+            $rootPackage->getStabilityFlags(),
+        );
+        $repositorySet->addRepository(
+            new CompositeRepository($this->composer->getRepositoryManager()->getRepositories()),
+        );
+
+        return $repositorySet;
     }
 
     /**

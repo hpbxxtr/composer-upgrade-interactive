@@ -132,6 +132,11 @@ final readonly class AnsiFormatter
         return self::BUMP_COLORS[$bumpType->value] . $bumpType->value . ' ▾' . self::RESET;
     }
 
+    public function loading(): string
+    {
+        return self::CYAN . '⠋' . self::RESET . '  ' . self::DIM . 'loading…' . self::RESET;
+    }
+
     public function pickerVersion(string $version): string
     {
         return $this->dim($version);

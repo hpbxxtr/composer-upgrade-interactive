@@ -6,7 +6,6 @@ namespace Hpbxxtr\UpgradeInteractive\Command;
 
 use Composer\Composer;
 use Composer\Command\BaseCommand;
-use Composer\Util\ProcessExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
@@ -17,6 +16,8 @@ use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUIInterface;
 use Override;
+
+use function Laravel\Prompts\spin;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
@@ -54,18 +55,18 @@ final class UpgradeInteractiveCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = $this->getIO();
-        $io->write('<info>Fetching composer package data…</info>');
 
-        $processExecutor   = null;
         $installedVersions = [];
 
         try {
             if ($this->packageResolver instanceof PackageResolverInterface) {
-                $entries = $this->packageResolver->resolve();
+                /** @var list<\Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage> $entries */
+                $entries = spin(fn (): array => $this->packageResolver->resolve(), 'Fetching package data…');
             } else {
-                $composer        = $this->requireComposer();
-                $processExecutor = $composer->getLoop()->getProcessExecutor() ?? new ProcessExecutor($this->getIO());
-                $entries         = (new PackageResolver($composer))->resolve();
+                $composer = $this->requireComposer();
+
+                /** @var list<\Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage> $entries */
+                $entries = spin(fn (): array => (new PackageResolver($composer))->resolve(), 'Fetching package data…');
 
                 $installedVersions = self::collectInstalledVersions($composer);
             }
@@ -88,9 +89,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         $ui = $this->interactiveUI ?? new InteractiveUI(
-            availableVersionsResolver: $processExecutor instanceof ProcessExecutor
-                ? new AvailableVersionsResolver($processExecutor)
-                : null,
+            availableVersionsResolver: isset($composer) ? new AvailableVersionsResolver($composer) : null,
             compatibilityChecker: isset($composer) ? new CompatibilityChecker($composer, installedVersions: $installedVersions) : null,
         );
 
