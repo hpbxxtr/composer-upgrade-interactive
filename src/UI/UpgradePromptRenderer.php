@@ -509,9 +509,7 @@ final class UpgradePromptRenderer extends Renderer
         array $updatableNames,
         string $indent,
     ): string {
-        $prefix = $indent . self::ANSI_YELLOW
-            . '! ' . $conflictReason->dependentPackage . ' ' . $conflictReason->dependentVersion
-            . ' requires ' . $conflictReason->requiredPackage . ' ' . $conflictReason->requiredConstraint;
+        $prefix = $indent . self::ANSI_YELLOW . '! ' . $conflictReason->format();
 
         if (!$conflictReason->isInstalled) {
             // Case 1: cross-selection conflict (both packages are user selections)
