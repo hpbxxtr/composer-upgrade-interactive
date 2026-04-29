@@ -10,6 +10,7 @@ use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\Url\ComposeUrlResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
+use Laravel\Prompts\Prompt;
 use Laravel\Prompts\Themes\Default\Renderer;
 
 use function array_map;
@@ -29,28 +30,18 @@ final class UpgradePromptRenderer extends Renderer
 {
     private const int CONFLICT_FOOTER_MAX = 5;
 
-    private const string ANSI_RESET    = "\e[0m";
-    private const string ANSI_BOLD     = "\e[1m";
-    private const string ANSI_BOLD_OFF = "\e[22m";
-    private const string ANSI_DIM      = "\e[2m";
-    private const string ANSI_CYAN     = "\e[36m";
-    private const string ANSI_GREEN    = "\e[32m";
-    private const string ANSI_RED      = "\e[31m";
-    private const string ANSI_BLUE     = "\e[34m";
-    private const string ANSI_BG_BLUE  = "\e[44m";
-    private const string ANSI_WHITE    = "\e[37m";
-    private const string ANSI_YELLOW   = "\e[33m";
+    private AnsiFormatter $formatter;
 
-    private const array BUMP_COLOR = [
-        'patch' => self::ANSI_BLUE,
-        'minor' => self::ANSI_GREEN,
-        'major' => self::ANSI_RED,
-    ];
+    public function __construct(Prompt $prompt)
+    {
+        parent::__construct($prompt);
+        $this->formatter = new AnsiFormatter();
+    }
 
     public function __invoke(UpgradePrompt $upgradePrompt): string
     {
         if ($upgradePrompt->state === 'submit') {
-            $this->line("  \e[32m✔\e[0m Done");
+            $this->line("  " . $this->formatter->submitCheck() . " Done");
 
             return (string) $this;
         }
@@ -63,13 +54,13 @@ final class UpgradePromptRenderer extends Renderer
         $hasProd     = $firstDevIdx !== 0;
         $hasDev      = $firstDevIdx !== -1;
 
-        $sep    = $this->separator();
+        $sep    = $this->formatter->separator();
         $indent = '  ';
 
         $namePad = Str::repeat(' ', 4 + $maxName);
         $fromPad = Str::repeat(' ', $maxFrom);
         $hdrCols = implode($sep, array_map(
-            fn (BumpType $bumpType): string => $this->visPad(self::ANSI_BOLD . $bumpType->value . self::ANSI_BOLD_OFF, $colW + 2),
+            fn (BumpType $bumpType): string => $this->formatter->visPad($this->formatter->columnHeader($bumpType->value), $colW + 2),
             BumpType::cases(),
         ));
 
@@ -85,10 +76,10 @@ final class UpgradePromptRenderer extends Renderer
             : null;
 
         // Label + column headers
-        $this->line($indent . self::ANSI_BOLD . $upgradePrompt->label . self::ANSI_RESET);
+        $this->line($indent . $this->formatter->promptLabel($upgradePrompt->label));
         $this->line($namePad . $indent . $fromPad . $sep . $hdrCols);
 
-        $totalWidth = $this->visLen($namePad . $indent . $fromPad . $sep . $hdrCols);
+        $totalWidth = $this->formatter->visLen($namePad . $indent . $fromPad . $sep . $hdrCols);
         $prodLabel  = $hasProd ? $this->sectionLabel('require', $totalWidth) : null;
         $devLabel   = $hasDev ? $this->sectionLabel('require-dev', $totalWidth) : null;
 
@@ -140,7 +131,7 @@ final class UpgradePromptRenderer extends Renderer
 
         // Help
         $this->line('');
-        $this->line($indent . $this->dimStr(
+        $this->line($indent . $this->formatter->dim(
             $upgradePrompt->isPickerActive
                 ? '↑↓ navigate · ←→ column · space select · esc close'
                 : '↑↓ navigate · ←→ column · space select · v versions · enter confirm',
@@ -164,25 +155,21 @@ final class UpgradePromptRenderer extends Renderer
             ? ($activeBumps[min($upgradePrompt->activeCol, count($activeBumps) - 1)] ?? null)
             : null;
 
-        $cursor = $isActive
-            ? self::ANSI_BOLD . '❯' . self::ANSI_BOLD_OFF
-            : ' ';
-
-        $check = $selectedK !== null
-            ? self::BUMP_COLOR[$selectedK->column->value] . '◉' . self::ANSI_RESET
-            : $this->dimStr('◯');
+        $cursor = $this->formatter->cursor($isActive);
+        $check  = $selectedK !== null
+            ? $this->formatter->selectedMark($selectedK->column)
+            : $this->formatter->unselectedMark();
 
         $label   = $this->nameLabel($outdatedPackage);
-        $nameStr = self::ANSI_BOLD . $outdatedPackage->name . self::ANSI_RESET
-            . ($outdatedPackage->abandonedBy !== null ? '  ' . self::ANSI_YELLOW . '⚠' . self::ANSI_RESET : '')
+        $nameStr = $this->formatter->bold($outdatedPackage->name)
+            . ($outdatedPackage->abandonedBy !== null ? '  ' . $this->formatter->abandonedIcon() : '')
             . Str::repeat(' ', max(0, $maxName - Str::length($label)));
-        $fromStr = $this->dimStr(Str::padRight($outdatedPackage->current, $maxFrom));
+        $fromStr = $this->formatter->dim(Str::padRight($outdatedPackage->current, $maxFrom));
 
-        $sep = $this->separator();
+        $sep = $this->formatter->separator();
 
         if ($isActive && $upgradePrompt->isPickerActive && $upgradePrompt->pickerBumpType instanceof BumpType) {
-            $bumpType    = $upgradePrompt->pickerBumpType;
-            $pickerLabel = self::BUMP_COLOR[$bumpType->value] . $bumpType->value . ' ▾' . self::ANSI_RESET;
+            $pickerLabel = $this->formatter->pickerExpandLabel($upgradePrompt->pickerBumpType);
 
             return sprintf('%s %s %s  %s%s%s', $cursor, $check, $nameStr, $fromStr, $sep, $pickerLabel);
         }
@@ -192,7 +179,7 @@ final class UpgradePromptRenderer extends Renderer
                 $target = $outdatedPackage->target($bumpType);
 
                 if (!$target instanceof VersionTarget) {
-                    return $this->visPad('  ' . $this->dimStr('–'), $colW + 2);
+                    return $this->formatter->visPad('  ' . $this->formatter->dim('–'), $colW + 2);
                 }
 
                 $isFocused  = $bumpType === $focusedBump;
@@ -203,29 +190,12 @@ final class UpgradePromptRenderer extends Renderer
                 $versionRaw = $selectedK !== null && $selectedK->column === $bumpType
                     ? $selectedK->target->versionRaw
                     : $target->versionRaw;
-                $color      = self::BUMP_COLOR[$bumpType->value];
                 $isCompatible = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $versionRaw);
 
-                $text = match (true) {
-                    $isFocused && $isSelected && !$isCompatible
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . self::ANSI_BOLD . '◉!' . $ver . self::ANSI_RESET,
-                    $isFocused && $isSelected
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . self::ANSI_BOLD . '◉ ' . $ver . self::ANSI_RESET,
-                    $isFocused && !$isCompatible
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '◯!' . $ver . self::ANSI_RESET,
-                    $isFocused
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '◯ ' . $ver . self::ANSI_RESET,
-                    $isSelected && !$isCompatible
-                        => self::ANSI_GREEN . self::ANSI_BOLD . '◉' . self::ANSI_RESET . self::ANSI_YELLOW . '!' . self::ANSI_RESET . $color . $ver . self::ANSI_RESET,
-                    $isSelected
-                        => self::ANSI_GREEN . self::ANSI_BOLD . '◉' . self::ANSI_RESET . ' ' . $color . $ver . self::ANSI_RESET,
-                    !$isCompatible
-                        => $this->dimStr('◯') . self::ANSI_YELLOW . '!' . self::ANSI_RESET . $color . $ver . self::ANSI_RESET,
-                    default
-                        => $this->dimStr('◯') . ' ' . $color . $ver . self::ANSI_RESET,
-                };
-
-                return $this->visPad($text, $colW + 2);
+                return $this->formatter->visPad(
+                    $this->formatter->versionCell($isFocused, $isSelected, $isCompatible, $ver, $bumpType),
+                    $colW + 2,
+                );
             },
             BumpType::cases(),
         ));
@@ -243,10 +213,10 @@ final class UpgradePromptRenderer extends Renderer
         }
 
         $indent = '        ';
-        $sep    = ' ' . $this->dimStr('|') . ' ';
+        $sep    = ' ' . $this->formatter->dim('|') . ' ';
 
         $lastColIdx   = count($columns) - 1;
-        $latestSuffix = $this->dimStr('  (latest)');
+        $latestSuffix = $this->formatter->dim('  (latest)');
         $latestLen    = Str::length('  (latest)');
 
         /** @var list<int> $colWidths */
@@ -276,7 +246,7 @@ final class UpgradePromptRenderer extends Renderer
         $headers = [];
 
         foreach ($columns as $cIdx => $col) {
-            $headers[] = $this->visPad($this->dimStr('── ' . $col->label . ' ──'), $colWidths[$cIdx] ?? 0);
+            $headers[] = $this->formatter->visPad($this->formatter->dim('── ' . $col->label . ' ──'), $colWidths[$cIdx] ?? 0);
         }
 
         $lines   = [$indent . implode($sep, $headers)];
@@ -299,19 +269,10 @@ final class UpgradePromptRenderer extends Renderer
                 $suffix       = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
                 $isCompatible = $upgradePrompt->pickerVersionCompatibility[$version->versionRaw] ?? true;
 
-                $text = match (true) {
-                    $isCursor && !$isCompatible
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version
-                            . self::ANSI_RESET . ' ' . self::ANSI_DIM . '✗' . self::ANSI_RESET . $suffix,
-                    $isCursor
-                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version . self::ANSI_RESET . $suffix,
-                    !$isCompatible
-                        => '  ' . self::ANSI_DIM . $version->version . ' ✗' . self::ANSI_RESET,
-                    default
-                        => '  ' . $this->dimStr($version->version) . $suffix,
-                };
-
-                $cells[] = $this->visPad($text, $colWidth);
+                $cells[] = $this->formatter->visPad(
+                    $this->formatter->pickerRow($isCursor, $isCompatible, $version->version, $suffix),
+                    $colWidth,
+                );
             }
 
             $lines[] = $indent . implode($sep, $cells);
@@ -324,7 +285,7 @@ final class UpgradePromptRenderer extends Renderer
     {
         $dashes = Str::repeat('─', max(0, $totalWidth - Str::length($label) - 7));
 
-        return $this->dimStr(sprintf('  ─── %s %s', $label, $dashes));
+        return $this->formatter->dim(sprintf('  ─── %s %s', $label, $dashes));
     }
 
     private function nameLabel(OutdatedPackage $outdatedPackage): string
@@ -332,32 +293,6 @@ final class UpgradePromptRenderer extends Renderer
         return $outdatedPackage->abandonedBy !== null
             ? $outdatedPackage->name . '  ⚠'
             : $outdatedPackage->name;
-    }
-
-    private function separator(): string
-    {
-        return $this->dimStr('  │  ');
-    }
-
-    private function dimStr(string $s): string
-    {
-        return self::ANSI_DIM . $s . self::ANSI_RESET;
-    }
-
-    /** Wraps $text in an OSC 8 hyperlink so supporting terminals make it clickable. */
-    private function hyperlink(string $url, string $text): string
-    {
-        return "\e]8;;" . $url . "\e\\" . $text . "\e]8;;\e\\";
-    }
-
-    private function visLen(string $s): int
-    {
-        return Str::length(Str::replace('/\e\[[0-9;]*m/', $s, ''));
-    }
-
-    private function visPad(string $s, int $width): string
-    {
-        return $s . Str::repeat(' ', max(0, $width - $this->visLen($s)));
     }
 
     /**
@@ -433,17 +368,18 @@ final class UpgradePromptRenderer extends Renderer
         $lines = [];
 
         if ($bumpType instanceof BumpType) {
-            $color = self::BUMP_COLOR[$bumpType->value];
-            $urls  = (new ComposeUrlResolver($outdatedPackage))->resolve($bumpType, $versionTarget);
+            $urls = (new ComposeUrlResolver($outdatedPackage))->resolve($bumpType, $versionTarget);
 
             if ($urls->compareUrl !== null) {
-                $lines[] = $indent . $color . $this->visPad($bumpType->value, 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $this->hyperlink($urls->compareUrl, $urls->compareUrl) . self::ANSI_RESET;
+                $lines[] = $indent . $this->formatter->bumpColor($bumpType, $this->formatter->visPad($bumpType->value, 5))
+                    . $indent . $this->formatter->footerLabel('compare')
+                    . $indent . $this->formatter->footerLink($urls->compareUrl);
             }
 
             if ($urls->releaseUrl !== null) {
-                $lines[] = $indent . $color . $this->visPad('', 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('release') . $indent . self::ANSI_CYAN . $this->hyperlink($urls->releaseUrl, $urls->releaseUrl) . self::ANSI_RESET;
+                $lines[] = $indent . $this->formatter->bumpColor($bumpType, $this->formatter->visPad('', 5))
+                    . $indent . $this->formatter->footerLabel('release')
+                    . $indent . $this->formatter->footerLink($urls->releaseUrl);
             }
         }
 
@@ -451,7 +387,7 @@ final class UpgradePromptRenderer extends Renderer
             $notice  = $outdatedPackage->abandonedBy !== ''
                 ? '⚠ abandoned · use ' . $outdatedPackage->abandonedBy . ' instead'
                 : '⚠ abandoned';
-            $lines[] = $indent . self::ANSI_YELLOW . $notice . self::ANSI_RESET;
+            $lines[] = $indent . $this->formatter->warning($notice);
         }
 
         return $lines;
@@ -522,7 +458,7 @@ final class UpgradePromptRenderer extends Renderer
 
         if ($overflowCount > 0) {
             $lines   = array_slice($lines, 0, self::CONFLICT_FOOTER_MAX);
-            $lines[] = $indent . $this->dimStr(
+            $lines[] = $indent . $this->formatter->dim(
                 '… and ' . $overflowCount . ' more conflict' . ($overflowCount > 1 ? 's' : ''),
             );
         }
@@ -542,11 +478,11 @@ final class UpgradePromptRenderer extends Renderer
         array $updatableNames,
         string $indent,
     ): string {
-        $prefix = $indent . self::ANSI_YELLOW . '! ' . $conflictReason->format();
+        $base = '! ' . $conflictReason->format();
 
         if (!$conflictReason->isInstalled) {
             // Case 1: cross-selection conflict (both packages are user selections)
-            return $prefix . ' — selected: ' . $conflictReason->selectedVersion . self::ANSI_RESET;
+            return $indent . $this->formatter->warning($base . ' — selected: ' . $conflictReason->selectedVersion);
         }
 
         if ($conflictReason->dependentPackage === $forPackage) {
@@ -556,7 +492,7 @@ final class UpgradePromptRenderer extends Renderer
                 ? ' — installed: ' . $conflictReason->selectedVersion . ' (update available)'
                 : ' — installed: ' . $conflictReason->selectedVersion;
 
-            return $prefix . $suffix . self::ANSI_RESET;
+            return $indent . $this->formatter->warning($base . $suffix);
         }
 
         // Case 3: backward — an installed package requires the candidate at a conflicting constraint
@@ -565,6 +501,6 @@ final class UpgradePromptRenderer extends Renderer
             ? ' — installed, update available'
             : ' — installed, no update available';
 
-        return $prefix . $suffix . self::ANSI_RESET;
+        return $indent . $this->formatter->warning($base . $suffix);
     }
 }
