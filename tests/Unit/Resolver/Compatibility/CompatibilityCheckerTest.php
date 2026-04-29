@@ -310,4 +310,163 @@ describe('CompatibilityChecker', function (): void {
 
         expect($countingRepo->loadPackagesCallCount)->toBe(2);
     });
+
+    // ---------------------------------------------------------------------------
+    // Installed-package conflicts
+    // ---------------------------------------------------------------------------
+
+    it('detects a forward conflict when candidate requires dep at ^2.0 but dep is installed at 1.5.0', function (): void {
+        $completePackage    = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $installedDep = \makeCheckerPackage('vendor/dep', '1.5.0');
+        $completePackage->setRequires(['vendor/dep' => \makeLink('vendor/pkg', 'vendor/dep', '^2.0')]);
+        $installedDep->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $installedDep]),
+            installedVersions: ['vendor/dep' => '1.5.0'],
+        );
+
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('2.0.0'), []);
+
+        expect($conflicts)->toHaveCount(1);
+        expect($conflicts[0]->dependentPackage)->toBe('vendor/pkg');
+        expect($conflicts[0]->requiredPackage)->toBe('vendor/dep');
+        expect($conflicts[0]->selectedVersion)->toBe('1.5.0');
+        expect($conflicts[0]->isInstalled)->toBeTrue();
+    });
+
+    it('returns no conflict when installed dep satisfies the candidate constraint', function (): void {
+        $completePackage    = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $installedDep = \makeCheckerPackage('vendor/dep', '2.1.0');
+        $completePackage->setRequires(['vendor/dep' => \makeLink('vendor/pkg', 'vendor/dep', '^2.0')]);
+        $installedDep->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $installedDep]),
+            installedVersions: ['vendor/dep' => '2.1.0'],
+        );
+
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('2.0.0'), []);
+
+        expect($conflicts)->toBe([]);
+    });
+
+    it('detects a backward conflict when an installed package requires candidate at ^1.0 but candidate is 2.0.0', function (): void {
+        $completePackage  = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $installedA = \makeCheckerPackage('vendor/locked', '1.5.0');
+        $completePackage->setRequires([]);
+        $installedA->setRequires(['vendor/pkg' => \makeLink('vendor/locked', 'vendor/pkg', '^1.0')]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $installedA]),
+            installedVersions: ['vendor/locked' => '1.5.0'],
+        );
+
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('2.0.0'), []);
+
+        expect($conflicts)->toHaveCount(1);
+        expect($conflicts[0]->dependentPackage)->toBe('vendor/locked');
+        expect($conflicts[0]->dependentVersion)->toBe('1.5.0');
+        expect($conflicts[0]->requiredPackage)->toBe('vendor/pkg');
+        expect($conflicts[0]->requiredConstraint)->toBe('^1.0');
+        expect($conflicts[0]->isInstalled)->toBeTrue();
+    });
+
+    it('uses the selected version instead of the installed version when a package appears in both', function (): void {
+        // vendor/dep is installed at 1.5.0 (which would conflict with ^2.0),
+        // but selected at 2.0.0 — selection must override installed; no conflict expected.
+        $completePackage    = \makeCheckerPackage('vendor/pkg', '3.0.0');
+        $installedDep = \makeCheckerPackage('vendor/dep', '1.5.0');
+        $selectedDep  = \makeCheckerPackage('vendor/dep', '2.0.0');
+        $completePackage->setRequires(['vendor/dep' => \makeLink('vendor/pkg', 'vendor/dep', '^2.0')]);
+        $installedDep->setRequires([]);
+        $selectedDep->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $installedDep, $selectedDep]),
+            installedVersions: ['vendor/dep' => '1.5.0'],
+        );
+
+        $conflicts = $checker->checkCandidate(
+            'vendor/pkg',
+            VersionTarget::fromRaw('3.0.0'),
+            ['vendor/dep' => \sel('2.0.0')],
+        );
+
+        expect($conflicts)->toBe([]);
+    });
+
+    it('sets isInstalled to false for a cross-selection conflict even when the package is also in installedVersions', function (): void {
+        // vendor/dep installed at 6.9.0 AND selected at 7.0.0 — the forward conflict uses the
+        // selected version (7.0.0 vs ^6.4), so isInstalled must be false.
+        $completePackage    = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $installedDep = \makeCheckerPackage('vendor/dep', '6.9.0');
+        $selectedDep  = \makeCheckerPackage('vendor/dep', '7.0.0');
+        $completePackage->setRequires(['vendor/dep' => \makeLink('vendor/pkg', 'vendor/dep', '^6.4')]);
+        $installedDep->setRequires([]);
+        $selectedDep->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $installedDep, $selectedDep]),
+            installedVersions: ['vendor/dep' => '6.9.0'],
+        );
+
+        $conflicts = $checker->checkCandidate(
+            'vendor/pkg',
+            VersionTarget::fromRaw('2.0.0'),
+            ['vendor/dep' => \sel('7.0.0')],
+        );
+
+        expect($conflicts)->toHaveCount(1);
+        expect($conflicts[0]->isInstalled)->toBeFalse();
+        expect($conflicts[0]->selectedVersion)->toBe('7.0.0');
+    });
+
+    // ---------------------------------------------------------------------------
+    // buildRepositorySet() — exercised when no RepositorySet is injected
+    // ---------------------------------------------------------------------------
+
+    it('builds its own RepositorySet from Composer when none is injected', function (): void {
+        $mock = \Mockery::mock(\Composer\Repository\RepositoryManager::class);
+        $mock->shouldReceive('getRepositories')->andReturn([]);
+
+        $rootPackage = \Mockery::mock(\Composer\Package\RootPackageInterface::class);
+        $rootPackage->shouldReceive('getMinimumStability')->andReturn('stable');
+        $rootPackage->shouldReceive('getStabilityFlags')->andReturn([]);
+
+        $composer = \Mockery::mock(\Composer\Composer::class);
+        $composer->shouldReceive('getPackage')->andReturn($rootPackage);
+        $composer->shouldReceive('getRepositoryManager')->andReturn($mock);
+
+        // No second argument → buildRepositorySet() is called internally (lines 131–135)
+        $checker = new CompatibilityChecker($composer);
+
+        // Empty repo → no metadata found → no conflicts; verifies construction and execution succeed
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('1.0.0'), []);
+
+        expect($conflicts)->toBe([]);
+    });
+
+    it('skips backward check for an installed package that does not require the candidate', function (): void {
+        // vendor/unrelated is installed and requires vendor/other, not vendor/pkg — must be skipped
+        $completePackage  = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $unrelated  = \makeCheckerPackage('vendor/unrelated', '1.0.0');
+        $completePackage->setRequires([]);
+        $unrelated->setRequires(['vendor/other' => \makeLink('vendor/unrelated', 'vendor/other', '^3.0')]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $unrelated]),
+            installedVersions: ['vendor/unrelated' => '1.0.0'],
+        );
+
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('2.0.0'), []);
+
+        expect($conflicts)->toBe([]);
+    });
 });

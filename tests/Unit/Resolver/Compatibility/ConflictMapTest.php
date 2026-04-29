@@ -125,4 +125,45 @@ describe('ConflictMap', function (): void {
             expect($map->conflictsFor('vendor/a', '1.0.0'))->toHaveCount(2);
         });
     });
+
+    describe('withMerged()', function (): void {
+        it('returns a new map containing existing and extra entries', function (): void {
+            $existing = new ConflictReason('vendor/a', '1.0.0', 'vendor/b', '^1.0', '2.0.0');
+            $extra    = new ConflictReason('vendor/a', '2.0.0', 'vendor/c', '^2.0', '3.0.0');
+
+            $map    = new ConflictMap(['vendor/a' => ['1.0.0' => [$existing]]]);
+            $conflictMap = $map->withMerged(['vendor/a' => ['2.0.0' => [$extra]]]);
+
+            expect($conflictMap->conflictsFor('vendor/a', '1.0.0'))->toHaveCount(1)
+                ->and($conflictMap->conflictsFor('vendor/a', '2.0.0'))->toHaveCount(1);
+        });
+
+        it('overwrites an existing entry when the same package+version appears in extra', function (): void {
+            $old = new ConflictReason('vendor/a', '1.0.0', 'vendor/b', '^1.0', '2.0.0');
+            $new = new ConflictReason('vendor/a', '1.0.0', 'vendor/c', '^3.0', '4.0.0');
+
+            $map    = new ConflictMap(['vendor/a' => ['1.0.0' => [$old]]]);
+            $conflictMap = $map->withMerged(['vendor/a' => ['1.0.0' => [$new]]]);
+
+            expect($conflictMap->conflictsFor('vendor/a', '1.0.0'))
+                ->toHaveCount(1)
+                ->and($conflictMap->conflictsFor('vendor/a', '1.0.0')[0])->toBe($new);
+        });
+
+        it('does not mutate the original map', function (): void {
+            $conflictMap    = ConflictMap::empty();
+            $reason = new ConflictReason('vendor/a', '1.0.0', 'vendor/b', '^1.0', '2.0.0');
+            $conflictMap->withMerged(['vendor/a' => ['1.0.0' => [$reason]]]);
+
+            expect($conflictMap->isEmpty())->toBeTrue();
+        });
+
+        it('adds a new package when the package did not exist before', function (): void {
+            $conflictMap    = ConflictMap::empty();
+            $reason = new ConflictReason('vendor/new', '3.0.0', 'vendor/dep', '^1.0', '2.0.0');
+            $merged = $conflictMap->withMerged(['vendor/new' => ['3.0.0' => [$reason]]]);
+
+            expect($merged->conflictsFor('vendor/new', '3.0.0'))->toHaveCount(1);
+        });
+    });
 });

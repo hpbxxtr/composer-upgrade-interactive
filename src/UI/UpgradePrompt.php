@@ -8,6 +8,7 @@ use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
@@ -15,6 +16,7 @@ use Laravel\Prompts\Key;
 use Laravel\Prompts\Prompt;
 use Override;
 
+use UnexpectedValueException;
 use function array_fill_keys;
 use function array_filter;
 use function array_map;
@@ -195,7 +197,7 @@ final class UpgradePrompt extends Prompt
 
     private function openPicker(): void
     {
-        if (!$this->availableVersionsResolver instanceof \Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface) {
+        if (!$this->availableVersionsResolver instanceof AvailableVersionsResolverInterface) {
             return;
         }
 
@@ -239,21 +241,27 @@ final class UpgradePrompt extends Prompt
             /** @var array<string, VersionSelection> $otherSelections */
             $otherSelections = array_filter(
                 $this->selections,
-                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection && $k !== $entry->name,
+                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof VersionSelection && $k !== $entry->name,
                 ARRAY_FILTER_USE_BOTH,
             );
 
             $this->pickerVersionCompatibility = [];
 
+            /** @var array<string, list<ConflictReason>> $pickerConflictData */
+            $pickerConflictData = [];
+
             foreach ($versions as $version) {
                 try {
                     $pickerConflicts = $this->compatibilityChecker->checkCandidate($entry->name, $version, $otherSelections);
-                } catch (\UnexpectedValueException) {
+                } catch (UnexpectedValueException) {
                     $pickerConflicts = [];
                 }
 
                 $this->pickerVersionCompatibility[$version->versionRaw] = ($pickerConflicts === []);
+                $pickerConflictData[$version->versionRaw]                = $pickerConflicts;
             }
+
+            $this->conflictMap = $this->conflictMap->withMerged([$entry->name => $pickerConflictData]);
         }
 
         $this->isPickerActive = true;
@@ -306,7 +314,7 @@ final class UpgradePrompt extends Prompt
             return;
         }
 
-        if (!$this->pickerBumpType instanceof \Hpbxxtr\UpgradeInteractive\Resolver\BumpType || $this->pickerPackageName === null) {
+        if (!$this->pickerBumpType instanceof BumpType || $this->pickerPackageName === null) {
             return;
         }
 
@@ -369,7 +377,7 @@ final class UpgradePrompt extends Prompt
             return;
         }
 
-        /** @var array<string, array<string, list<\Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason>>> $data */
+        /** @var array<string, array<string, list<ConflictReason>>> $data */
         $data = [];
 
         foreach ($this->entries as $entry) {
@@ -378,7 +386,7 @@ final class UpgradePrompt extends Prompt
             /** @var array<string, VersionSelection> $otherSelections */
             $otherSelections = array_filter(
                 $this->selections,
-                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection && $k !== $name,
+                static fn (?VersionSelection $versionSelection, string $k): bool => $versionSelection instanceof VersionSelection && $k !== $name,
                 ARRAY_FILTER_USE_BOTH,
             );
 
@@ -406,7 +414,7 @@ final class UpgradePrompt extends Prompt
             foreach ($targets as $target) {
                 try {
                     $conflicts = $this->compatibilityChecker->checkCandidate($name, $target, $otherSelections);
-                } catch (\UnexpectedValueException) {
+                } catch (UnexpectedValueException) {
                     $conflicts = [];
                 }
 

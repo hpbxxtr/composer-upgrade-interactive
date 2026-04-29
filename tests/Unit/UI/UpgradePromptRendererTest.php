@@ -761,7 +761,7 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 // Compatibility: static footer (phase 1) — selection conflicts always visible
 // ---------------------------------------------------------------------------
 
-\it('renders selection conflict in footer even when cursor has moved to a different column', function (): void {
+\it('does not show selection conflict when cursor has moved to a different column of the same package', function (): void {
     Prompt::fake(["\n"]);
 
     // Package has both minor and major — selection on minor (conflicting), cursor on major
@@ -784,14 +784,16 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
         VersionTarget::fromRaw('1.3.0'),
     );
 
+    // Only minor (1.3.0) conflicts; major (2.0.0) has no conflicts
     $prompt->conflictMap = new ConflictMap([
         'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
     ]);
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    // Phase 1: selection conflict must appear even though cursor is on major
-    \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
+    // Hover is on major (2.0.0) — no conflicts for that version, and selection conflicts
+    // are not shown for the active entry (hover replaces selection).
+    \expect($output)->not->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
 });
 
 \it('renders conflict footer lines for all selected packages regardless of focused row', function (): void {
@@ -848,13 +850,51 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    // Phase 1 covers it; phase 2 must be skipped — conflict line appears exactly once
+    // Phase 1 is skipped (active entry); phase 2 covers it — conflict line appears exactly once
     $conflictLine  = '! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0';
     $occurrences   = substr_count($output, $conflictLine);
     \expect($occurrences)->toBe(1);
 });
 
-\it('renders both selection conflict and hover conflict when they are for different versions', function (): void {
+\it('renders a cross-selection conflict exactly once when it appears in both packages conflict lists', function (): void {
+    Prompt::fake(["\n"]);
+
+    // vendor/a and vendor/b are both selected; cursor is on vendor/c (a third package).
+    // The conflict between a and b is stored in both conflict-map entries — deduplication must
+    // prevent the same line from appearing twice.
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/a', '1.0.0', '2.0.0');
+    $pkgB = \outdatedPackageWithMinor('vendor/b', '1.0.0', '2.0.0');
+    $pkgC = \outdatedPackageWithMinor('vendor/c', '1.0.0', '2.0.0');
+
+    $prompt = new UpgradePrompt([$outdatedPackage, $pkgB, $pkgC]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 2; // cursor on vendor/c
+
+    $prompt->selections['vendor/a'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+    $prompt->selections['vendor/b'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+
+    // Same logical conflict object appears in both a's and b's conflict-map entries
+    $sharedConflict = new ConflictReason('vendor/a', '2.0.0', 'vendor/dep', '^1.0', '3.0.0');
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/a' => ['2.0.0' => [$sharedConflict]],
+        'vendor/b' => ['2.0.0' => [$sharedConflict]],
+    ]);
+
+    $output       = \stripAnsi(\renderPrompt($prompt));
+    $conflictLine = '! vendor/a 2.0.0 requires vendor/dep ^1.0 — selected: 3.0.0';
+
+    \expect(substr_count($output, $conflictLine))->toBe(1);
+});
+
+\it('shows only the hover conflict when hovering a different version than the active selection', function (): void {
     Prompt::fake(["\n"]);
 
     // Package has patch (1.0.1, selected + conflicting) and minor (1.3.0, hover + conflicting)
@@ -886,7 +926,282 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    // Phase 1 shows selected (patch) conflict; phase 2 shows hover (minor) conflict
-    \expect($output)->toContain('! vendor/pkg 1.0.1 requires vendor/dep ^1.0 — selected: 2.0.0')
-        ->and($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0');
+    // Hover (minor 1.3.0) replaces the selection (patch 1.0.1) for the active entry:
+    // only the hovered version's conflict is shown in the footer.
+    \expect($output)->toContain('! vendor/pkg 1.3.0 requires vendor/dep ^1.0 — selected: 2.0.0')
+        ->and($output)->not->toContain('! vendor/pkg 1.0.1 requires vendor/dep ^1.0 — selected: 2.0.0');
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: installed-package conflict footer formatting
+// ---------------------------------------------------------------------------
+
+\it('renders installed dep conflict with "installed: X" suffix when dep is not updatable', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '2.0.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+
+    // Forward conflict: vendor/pkg 2.0.0 requires vendor/dep ^2.0 — installed at 1.5.0, NOT updatable
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '2.0.0' => [new ConflictReason('vendor/pkg', '2.0.0', 'vendor/dep', '^2.0', '1.5.0', isInstalled: true)],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/pkg 2.0.0 requires vendor/dep ^2.0 — installed: 1.5.0')
+        ->and($output)->not->toContain('update available')
+        ->and($output)->not->toContain('selected:');
+});
+
+\it('renders installed dep conflict with "(update available)" when dep is in the updatable list', function (): void {
+    Prompt::fake(["\n"]);
+
+    // Both vendor/pkg and vendor/dep are in the updatable list
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '2.0.0');
+    $depEntry = \outdatedPackageWithMinor('vendor/dep', '1.5.0', '2.0.0');
+    $prompt   = new UpgradePrompt([$outdatedPackage, $depEntry]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+
+    // Forward conflict: vendor/dep IS in entries (update available)
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '2.0.0' => [new ConflictReason('vendor/pkg', '2.0.0', 'vendor/dep', '^2.0', '1.5.0', isInstalled: true)],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/pkg 2.0.0 requires vendor/dep ^2.0 — installed: 1.5.0 (update available)');
+});
+
+\it('renders backward installed conflict with "no update available" when dependent is not updatable', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '2.0.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+
+    // Backward conflict: vendor/locked (installed, NOT in entries) requires vendor/pkg ^1.0
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '2.0.0' => [new ConflictReason('vendor/locked', '1.5.0', 'vendor/pkg', '^1.0', '2.0.0', isInstalled: true)],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/locked 1.5.0 requires vendor/pkg ^1.0 — installed, no update available')
+        ->and($output)->not->toContain('selected:');
+});
+
+\it('renders backward installed conflict with "update available" when dependent is in the updatable list', function (): void {
+    Prompt::fake(["\n"]);
+
+    // vendor/other is also in the updatable list (has an update available)
+    $outdatedPackage   = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '2.0.0');
+    $otherEntry = \outdatedPackageWithMinor('vendor/other', '1.5.0', '1.6.0');
+    $prompt     = new UpgradePrompt([$outdatedPackage, $otherEntry]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.0.0'),
+    );
+
+    // Backward conflict: vendor/other (installed, IS in entries) requires vendor/pkg ^1.0
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '2.0.0' => [new ConflictReason('vendor/other', '1.5.0', 'vendor/pkg', '^1.0', '2.0.0', isInstalled: true)],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('! vendor/other 1.5.0 requires vendor/pkg ^1.0 — installed, update available');
+});
+
+\it('caps conflict lines at 5 and appends overflow indicator when there are 6 conflicts', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    // 6 conflict reasons → 5 shown + overflow line
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '1.3.0' => [
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep1', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep2', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep3', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep4', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep5', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep6', '^1.0', '2.0.0'),
+            ],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('vendor/dep5')
+        ->and($output)->not->toContain('vendor/dep6')
+        ->and($output)->toContain('… and 1 more conflict');
+});
+
+\it('shows all 5 conflict lines without overflow indicator when there are exactly 5 conflicts', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => [
+            '1.3.0' => [
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep1', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep2', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep3', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep4', '^1.0', '2.0.0'),
+                new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep5', '^1.0', '2.0.0'),
+            ],
+        ],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('vendor/dep5')
+        ->and($output)->not->toContain('more conflict');
+});
+
+// ---------------------------------------------------------------------------
+// Compatibility: Phase 1 filter — conflicts that mention the active entry are suppressed
+// ---------------------------------------------------------------------------
+
+\it('Phase 1 suppresses a conflict whose dependentPackage is the active entry', function (): void {
+    Prompt::fake(["\n"]);
+
+    // vendor/a is active (row 0); vendor/b is selected.
+    // vendor/b's conflict is a backward conflict: "vendor/a 1.3.0 requires vendor/b ^1.0 — selected: 2.1.0".
+    // dependentPackage = 'vendor/a' === activeEntry.name → line 221 fires, conflict is filtered.
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/a', '1.0.0', '1.3.0');
+    $pkgB            = \outdatedPackageWithMinor('vendor/b', '2.0.0', '2.1.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage, $pkgB]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/b'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.1.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/b' => ['2.1.0' => [new ConflictReason('vendor/a', '1.3.0', 'vendor/b', '^1.0', '2.1.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->not->toContain('! vendor/a 1.3.0 requires vendor/b');
+});
+
+\it('Phase 1 suppresses a conflict whose requiredPackage is the active entry', function (): void {
+    Prompt::fake(["\n"]);
+
+    // vendor/a is active (row 0); vendor/b is selected.
+    // vendor/b's conflict is a forward conflict: "vendor/b 2.1.0 requires vendor/a ^1.0 — installed: 1.5.0".
+    // requiredPackage = 'vendor/a' === activeEntry.name → line 224 fires, conflict is filtered.
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/a', '1.0.0', '1.3.0');
+    $pkgB            = \outdatedPackageWithMinor('vendor/b', '2.0.0', '2.1.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage, $pkgB]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/b'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('2.1.0'),
+    );
+
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/b' => ['2.1.0' => [new ConflictReason('vendor/b', '2.1.0', 'vendor/a', '^1.0', '1.5.0', isInstalled: true)]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->not->toContain('! vendor/b 2.1.0 requires vendor/a');
+});
+
+\it('cross-selection conflict still renders "selected: X" format when isInstalled is false', function (): void {
+    Prompt::fake(["\n"]);
+
+    $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+    $prompt          = new UpgradePrompt([$outdatedPackage]);
+    $prompt->prompt();
+
+    $prompt->state     = 'initial';
+    $prompt->activeRow = 0;
+
+    $prompt->selections['vendor/pkg'] = new \Hpbxxtr\UpgradeInteractive\Resolver\VersionSelection(
+        \Hpbxxtr\UpgradeInteractive\Resolver\BumpType::Minor,
+        VersionTarget::fromRaw('1.3.0'),
+    );
+
+    // isInstalled defaults to false
+    $prompt->conflictMap = new ConflictMap([
+        'vendor/pkg' => ['1.3.0' => [new ConflictReason('vendor/pkg', '1.3.0', 'vendor/dep', '^1.0', '2.0.0')]],
+    ]);
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect($output)->toContain('— selected: 2.0.0')
+        ->and($output)->not->toContain('installed');
 });

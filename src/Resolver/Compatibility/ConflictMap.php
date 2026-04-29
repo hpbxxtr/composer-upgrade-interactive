@@ -40,4 +40,23 @@ final readonly class ConflictMap
     {
         return $this->data[$packageName][$versionRaw] ?? [];
     }
+
+    /**
+     * Returns a new ConflictMap with additional (package, version) entries merged in.
+     * Existing entries for the same pair are overwritten by the incoming data.
+     *
+     * @param array<string, array<string, list<ConflictReason>>> $extra
+     */
+    public function withMerged(array $extra): self
+    {
+        $merged = $this->data;
+
+        foreach ($extra as $name => $versions) {
+            foreach ($versions as $versionRaw => $reasons) {
+                $merged[$name][$versionRaw] = $reasons;
+            }
+        }
+
+        return new self($merged);
+    }
 }

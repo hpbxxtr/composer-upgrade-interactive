@@ -19,6 +19,7 @@ use Override;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use Throwable;
 
 /**
  * @api
@@ -54,7 +55,8 @@ final class UpgradeInteractiveCommand extends BaseCommand
         $io = $this->getIO();
         $io->write('<info>Fetching composer package data…</info>');
 
-        $processExecutor = null;
+        $processExecutor   = null;
+        $installedVersions = [];
 
         try {
             if ($this->packageResolver instanceof PackageResolverInterface) {
@@ -63,8 +65,23 @@ final class UpgradeInteractiveCommand extends BaseCommand
                 $composer        = $this->requireComposer();
                 $processExecutor = $composer->getLoop()->getProcessExecutor() ?? new ProcessExecutor($this->getIO());
                 $entries         = (new PackageResolver($composer))->resolve();
+
+                $rootPackage    = $composer->getPackage();
+                $directDepNames = array_merge(
+                    array_keys($rootPackage->getRequires()),
+                    array_keys($rootPackage->getDevRequires()),
+                );
+                $isDirectDep = array_flip($directDepNames);
+
+                foreach ($composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
+                    if (!isset($isDirectDep[$basePackage->getName()])) {
+                        continue;
+                    }
+
+                    $installedVersions[$basePackage->getName()] = $basePackage->getPrettyVersion();
+                }
             }
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
 
             return 1;
@@ -83,10 +100,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         $ui = $this->interactiveUI ?? new InteractiveUI(
-            availableVersionsResolver: $processExecutor instanceof \Composer\Util\ProcessExecutor
+            availableVersionsResolver: $processExecutor instanceof ProcessExecutor
                 ? new AvailableVersionsResolver($processExecutor)
                 : null,
-            compatibilityChecker: isset($composer) ? new CompatibilityChecker($composer) : null,
+            compatibilityChecker: isset($composer) ? new CompatibilityChecker($composer, installedVersions: $installedVersions) : null,
         );
 
         $selections = $ui->ask($entries);
@@ -105,7 +122,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
             $constraintType  = $isCaret ? ConstraintType::Caret : ConstraintType::Exact;
             $upgradeExecutor = $this->upgradeExecutor ?? new UpgradeExecutor($this->requireComposer(), $io);
             $upgradeExecutor->execute($selections, $constraintType);
-        } catch (\Throwable $throwable) {
+        } catch (Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
 
             return 1;
