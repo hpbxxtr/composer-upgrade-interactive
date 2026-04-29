@@ -57,46 +57,15 @@ final class UpgradePromptRenderer extends Renderer
 
         $entries = $upgradePrompt->entries;
 
-        // Precompute column widths
-        $nameLabel = static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->abandonedBy !== null ? $outdatedPackage->name . '  ⚠' : $outdatedPackage->name;
+        ['maxName' => $maxName, 'maxFrom' => $maxFrom, 'colW' => $colW] = $this->computeWidths($entries);
 
-        /** @var non-empty-list<int<0, max>> $nameLengths */
-        $nameLengths = array_map(static fn (OutdatedPackage $outdatedPackage): int => Str::length($nameLabel($outdatedPackage)), $entries);
-        $maxName     = max($nameLengths);
+        $firstDevIdx = $this->findFirstDevIndex($entries);
+        $hasProd     = $firstDevIdx !== 0;
+        $hasDev      = $firstDevIdx !== -1;
 
-        /** @var non-empty-list<int<0, max>> $fromLengths */
-        $fromLengths = array_map(static fn (OutdatedPackage $outdatedPackage): int => Str::length($outdatedPackage->current), $entries);
-        $maxFrom     = max($fromLengths);
+        $sep    = $this->separator();
+        $indent = '  ';
 
-        /** @var non-empty-list<int<0, max>> $colWidths */
-        $colWidths = array_map(
-            static fn (OutdatedPackage $outdatedPackage): int => max(
-                0,
-                $outdatedPackage->patch instanceof VersionTarget ? Str::length($outdatedPackage->patch->version) : 0,
-                $outdatedPackage->minor instanceof VersionTarget ? Str::length($outdatedPackage->minor->version) : 0,
-                $outdatedPackage->major instanceof VersionTarget ? Str::length($outdatedPackage->major->version) : 0,
-            ),
-            $entries,
-        );
-        $colW = max(5, ...$colWidths);
-
-        // Determine first dev row index
-        $firstDevIdx = -1;
-
-        foreach ($entries as $i => $entry) {
-            if ($entry->isDev) {
-                $firstDevIdx = $i;
-
-                break;
-            }
-        }
-
-        $hasProd = $firstDevIdx !== 0;
-        $hasDev  = $firstDevIdx !== -1;
-
-        $sep = $this->dimStr('  │  ');
-
-        // Header line
         $namePad = Str::repeat(' ', 4 + $maxName);
         $fromPad = Str::repeat(' ', $maxFrom);
         $hdrCols = implode($sep, array_map(
@@ -104,7 +73,6 @@ final class UpgradePromptRenderer extends Renderer
             BumpType::cases(),
         ));
 
-        // Focused bump for footer
         $activeEntry = $entries[$upgradePrompt->activeRow] ?? null;
 
         if ($activeEntry === null) {
@@ -112,15 +80,14 @@ final class UpgradePromptRenderer extends Renderer
         }
 
         $activeBumps = $activeEntry->availableBumps();
-        $focusedBump = $activeBumps !== [] ? ($activeBumps[min($upgradePrompt->activeCol, count($activeBumps) - 1)] ?? null) : null;
+        $focusedBump = $activeBumps !== []
+            ? ($activeBumps[min($upgradePrompt->activeCol, count($activeBumps) - 1)] ?? null)
+            : null;
 
-        $indent = '  ';
-
-        // Label
+        // Label + column headers
         $this->line($indent . self::ANSI_BOLD . $upgradePrompt->label . self::ANSI_RESET);
         $this->line($namePad . $indent . $fromPad . $sep . $hdrCols);
 
-        // Section labels
         $totalWidth = $this->visLen($namePad . $indent . $fromPad . $sep . $hdrCols);
         $prodLabel  = $hasProd ? $this->sectionLabel('require', $totalWidth) : null;
         $devLabel   = $hasDev ? $this->sectionLabel('require-dev', $totalWidth) : null;
@@ -138,56 +105,19 @@ final class UpgradePromptRenderer extends Renderer
                 $this->line($devLabel);
             }
 
-            $this->line($this->renderRow($upgradePrompt, $entry, $i, $maxName, $maxFrom, $colW, $nameLabel));
+            $this->line($this->renderRow($upgradePrompt, $entry, $i, $maxName, $maxFrom, $colW));
 
-            // Render inline picker rows immediately after the active row
             if ($upgradePrompt->isPickerActive && $i === $upgradePrompt->activeRow) {
-                foreach ($this->renderPickerTable($upgradePrompt) as $line) {
-                    $this->line($line);
+                foreach ($this->renderPickerTable($upgradePrompt) as $pickerLine) {
+                    $this->line($pickerLine);
                 }
             }
         }
 
-        // Footer: compare URL + abandonment notice
-        $footerLines = [];
-
-        $footerBump = $upgradePrompt->isPickerActive ? $upgradePrompt->pickerBumpType : $focusedBump;
-
-        if ($upgradePrompt->isPickerActive) {
-            $cursorCol    = $upgradePrompt->pickerColumns[$upgradePrompt->pickerCol] ?? null;
-            $footerTarget = $cursorCol instanceof PickerColumn
-                ? ($cursorCol->versions[$upgradePrompt->pickerRow] ?? null)
-                : null;
-        } else {
-            $selection    = $upgradePrompt->selections[$activeEntry->name] ?? null;
-            $footerTarget = ($selection !== null && $selection->column === $focusedBump)
-                ? $selection->target
-                : null;
-        }
-
-        if ($footerBump instanceof BumpType) {
-            $color = self::BUMP_COLOR[$footerBump->value];
-            $urls  = (new ComposeUrlResolver($activeEntry))->resolve($footerBump, $footerTarget);
-
-            if ($urls->compareUrl !== null) {
-                $footerLines[]
-                    = $indent . $color . $this->visPad($footerBump->value, 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $urls->compareUrl . self::ANSI_RESET;
-            }
-
-            if ($urls->releaseUrl !== null) {
-                $footerLines[]
-                    = $indent . $color . $this->visPad('', 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('release') . $indent . self::ANSI_CYAN . $urls->releaseUrl . self::ANSI_RESET;
-            }
-        }
-
-        if ($activeEntry->abandonedBy !== null) {
-            $notice = $activeEntry->abandonedBy !== ''
-                ? '⚠ abandoned · use ' . $activeEntry->abandonedBy . ' instead'
-                : '⚠ abandoned';
-            $footerLines[] = $indent . self::ANSI_YELLOW . $notice . self::ANSI_RESET;
-        }
+        // Footer: compare/release URLs, abandonment notice, conflict lines
+        $footerBump   = $upgradePrompt->isPickerActive ? $upgradePrompt->pickerBumpType : $focusedBump;
+        $footerTarget = $this->resolveFooterTarget($upgradePrompt, $activeEntry, $focusedBump);
+        $footerLines  = $this->buildFooterLines($activeEntry, $footerBump, $footerTarget, $indent);
 
         $hoveredVersionRaw = $footerTarget instanceof VersionTarget ? $footerTarget->versionRaw : '';
 
@@ -196,70 +126,7 @@ final class UpgradePromptRenderer extends Renderer
             $hoveredVersionRaw = $hoveredTarget instanceof VersionTarget ? $hoveredTarget->versionRaw : '';
         }
 
-        // Collect all conflict lines (both phases) then apply overflow cap
-        /** @var list<string> $conflictLines */
-        $conflictLines = [];
-        /** @var array<string, true> $seenConflicts */
-        $seenConflicts  = [];
-        $updatableNames = array_map(
-            static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name,
-            $upgradePrompt->entries,
-        );
-
-        // Phase 1 — static: conflicts for selected packages other than the active entry,
-        // filtered to exclude any conflict that mentions the active entry (Phase 2 handles those).
-        // Deduplication prevents the same cross-selection conflict from appearing from both sides.
-        foreach ($upgradePrompt->selections as $selPkgName => $selection) {
-            if ($selection === null) {
-                continue;
-            }
-
-            if ($selPkgName === $activeEntry->name) {
-                continue;
-            }
-
-            foreach ($upgradePrompt->conflictMap->conflictsFor($selPkgName, $selection->target->versionRaw) as $reason) {
-                if ($reason->dependentPackage === $activeEntry->name) {
-                    continue;
-                }
-
-                if ($reason->requiredPackage === $activeEntry->name) {
-                    continue;
-                }
-
-                $line = $this->formatConflictLine($reason, $selPkgName, $updatableNames, $indent);
-
-                if (!isset($seenConflicts[$line])) {
-                    $seenConflicts[$line] = true;
-                    $conflictLines[]      = $line;
-                }
-            }
-        }
-
-        // Phase 2 — hover: conflicts for the hovered version of the active entry.
-        // Replaces the active entry's selection conflicts — the user is evaluating this version now.
-        if ($hoveredVersionRaw !== '') {
-            foreach ($upgradePrompt->conflictMap->conflictsFor($activeEntry->name, $hoveredVersionRaw) as $reason) {
-                $line = $this->formatConflictLine($reason, $activeEntry->name, $updatableNames, $indent);
-
-                if (!isset($seenConflicts[$line])) {
-                    $seenConflicts[$line] = true;
-                    $conflictLines[]      = $line;
-                }
-            }
-        }
-
-        // Overflow cap
-        $overflowCount = count($conflictLines) - self::CONFLICT_FOOTER_MAX;
-
-        if ($overflowCount > 0) {
-            $conflictLines   = array_slice($conflictLines, 0, self::CONFLICT_FOOTER_MAX);
-            $conflictLines[] = $indent . $this->dimStr(
-                '… and ' . $overflowCount . ' more conflict' . ($overflowCount > 1 ? 's' : ''),
-            );
-        }
-
-        foreach ($conflictLines as $conflictLine) {
+        foreach ($this->collectConflictLines($upgradePrompt, $activeEntry, $hoveredVersionRaw, $indent) as $conflictLine) {
             $footerLines[] = $conflictLine;
         }
 
@@ -273,19 +140,15 @@ final class UpgradePromptRenderer extends Renderer
 
         // Help
         $this->line('');
-
-        if ($upgradePrompt->isPickerActive) {
-            $this->line($indent . $this->dimStr('↑↓ navigate · ←→ column · space select · esc close'));
-        } else {
-            $this->line($indent . $this->dimStr('↑↓ navigate · ←→ column · space select · v versions · enter confirm'));
-        }
+        $this->line($indent . $this->dimStr(
+            $upgradePrompt->isPickerActive
+                ? '↑↓ navigate · ←→ column · space select · esc close'
+                : '↑↓ navigate · ←→ column · space select · v versions · enter confirm',
+        ));
 
         return (string) $this;
     }
 
-    /**
-     * @param callable(OutdatedPackage):string $nameLabel
-     */
     private function renderRow(
         UpgradePrompt $upgradePrompt,
         OutdatedPackage $outdatedPackage,
@@ -293,7 +156,6 @@ final class UpgradePromptRenderer extends Renderer
         int $maxName,
         int $maxFrom,
         int $colW,
-        callable $nameLabel,
     ): string {
         $isActive    = $rowIdx === $upgradePrompt->activeRow;
         $selectedK   = $upgradePrompt->selections[$outdatedPackage->name] ?? null;
@@ -310,21 +172,17 @@ final class UpgradePromptRenderer extends Renderer
             ? self::BUMP_COLOR[$selectedK->column->value] . '◉' . self::ANSI_RESET
             : $this->dimStr('◯');
 
-        $label   = $nameLabel($outdatedPackage);
+        $label   = $this->nameLabel($outdatedPackage);
         $nameStr = self::ANSI_BOLD . $outdatedPackage->name . self::ANSI_RESET
-            . ($outdatedPackage->abandonedBy !== null
-                ? '  ' . self::ANSI_YELLOW . '⚠' . self::ANSI_RESET
-                : '')
+            . ($outdatedPackage->abandonedBy !== null ? '  ' . self::ANSI_YELLOW . '⚠' . self::ANSI_RESET : '')
             . Str::repeat(' ', max(0, $maxName - Str::length($label)));
         $fromStr = $this->dimStr(Str::padRight($outdatedPackage->current, $maxFrom));
 
-        $sep = $this->dimStr('  │  ');
+        $sep = $this->separator();
 
-        // If the picker is open for this row, render a compact header instead of the column grid
-        if ($isActive && $upgradePrompt->isPickerActive && $upgradePrompt->pickerBumpType instanceof \Hpbxxtr\UpgradeInteractive\Resolver\BumpType) {
+        if ($isActive && $upgradePrompt->isPickerActive && $upgradePrompt->pickerBumpType instanceof BumpType) {
             $bumpType    = $upgradePrompt->pickerBumpType;
-            $color       = self::BUMP_COLOR[$bumpType->value];
-            $pickerLabel = $color . $bumpType->value . ' ▾' . self::ANSI_RESET;
+            $pickerLabel = self::BUMP_COLOR[$bumpType->value] . $bumpType->value . ' ▾' . self::ANSI_RESET;
 
             return sprintf('%s %s %s  %s%s%s', $cursor, $check, $nameStr, $fromStr, $sep, $pickerLabel);
         }
@@ -339,15 +197,13 @@ final class UpgradePromptRenderer extends Renderer
 
                 $isFocused  = $bumpType === $focusedBump;
                 $isSelected = $bumpType === $selectedK?->column;
-                // Show the picker-selected version if it differs from the package's default target
                 $ver        = $selectedK !== null && $selectedK->column === $bumpType
                     ? $selectedK->target->version
                     : $target->version;
-                $color      = self::BUMP_COLOR[$bumpType->value];
-
-                $versionRaw   = $selectedK !== null && $selectedK->column === $bumpType
+                $versionRaw = $selectedK !== null && $selectedK->column === $bumpType
                     ? $selectedK->target->versionRaw
                     : $target->versionRaw;
+                $color      = self::BUMP_COLOR[$bumpType->value];
                 $isCompatible = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $versionRaw);
 
                 $text = match (true) {
@@ -417,26 +273,14 @@ final class UpgradePromptRenderer extends Renderer
             $colWidths[] = max($headerLen, $cellWidth);
         }
 
-        $lines = [];
-
         $headers = [];
 
         foreach ($columns as $cIdx => $col) {
-            $colWidth  = $colWidths[$cIdx] ?? 0;
-            $headers[] = $this->visPad($this->dimStr('── ' . $col->label . ' ──'), $colWidth);
+            $headers[] = $this->visPad($this->dimStr('── ' . $col->label . ' ──'), $colWidths[$cIdx] ?? 0);
         }
 
-        $lines[] = $indent . implode($sep, $headers);
-
-        $maxRows = 0;
-
-        foreach ($columns as $col) {
-            $count = count($col->versions);
-
-            if ($count > $maxRows) {
-                $maxRows = $count;
-            }
-        }
+        $lines   = [$indent . implode($sep, $headers)];
+        $maxRows = max(array_map(static fn (PickerColumn $pickerColumn): int => count($pickerColumn->versions), $columns));
 
         foreach (range(0, $maxRows - 1) as $rowIdx) {
             $cells = [];
@@ -455,16 +299,17 @@ final class UpgradePromptRenderer extends Renderer
                 $suffix       = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
                 $isCompatible = $upgradePrompt->pickerVersionCompatibility[$version->versionRaw] ?? true;
 
-                if ($isCursor && !$isCompatible) {
-                    $text = self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version
-                        . self::ANSI_RESET . ' ' . self::ANSI_DIM . '✗' . self::ANSI_RESET . $suffix;
-                } elseif ($isCursor) {
-                    $text = self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version . self::ANSI_RESET . $suffix;
-                } elseif (!$isCompatible) {
-                    $text = '  ' . self::ANSI_DIM . $version->version . ' ✗' . self::ANSI_RESET;
-                } else {
-                    $text = '  ' . $this->dimStr($version->version) . $suffix;
-                }
+                $text = match (true) {
+                    $isCursor && !$isCompatible
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version
+                            . self::ANSI_RESET . ' ' . self::ANSI_DIM . '✗' . self::ANSI_RESET . $suffix,
+                    $isCursor
+                        => self::ANSI_BG_BLUE . self::ANSI_WHITE . '▸ ' . $version->version . self::ANSI_RESET . $suffix,
+                    !$isCompatible
+                        => '  ' . self::ANSI_DIM . $version->version . ' ✗' . self::ANSI_RESET,
+                    default
+                        => '  ' . $this->dimStr($version->version) . $suffix,
+                };
 
                 $cells[] = $this->visPad($text, $colWidth);
             }
@@ -482,6 +327,18 @@ final class UpgradePromptRenderer extends Renderer
         return $this->dimStr(sprintf('  ─── %s %s', $label, $dashes));
     }
 
+    private function nameLabel(OutdatedPackage $outdatedPackage): string
+    {
+        return $outdatedPackage->abandonedBy !== null
+            ? $outdatedPackage->name . '  ⚠'
+            : $outdatedPackage->name;
+    }
+
+    private function separator(): string
+    {
+        return $this->dimStr('  │  ');
+    }
+
     private function dimStr(string $s): string
     {
         return self::ANSI_DIM . $s . self::ANSI_RESET;
@@ -495,6 +352,176 @@ final class UpgradePromptRenderer extends Renderer
     private function visPad(string $s, int $width): string
     {
         return $s . Str::repeat(' ', max(0, $width - $this->visLen($s)));
+    }
+
+    /**
+     * @param list<OutdatedPackage> $entries
+     * @return array{maxName: int, maxFrom: int, colW: int}
+     */
+    private function computeWidths(array $entries): array
+    {
+        $nameLengths = array_map(fn (OutdatedPackage $outdatedPackage): int => Str::length($this->nameLabel($outdatedPackage)), $entries);
+        $fromLengths = array_map(static fn (OutdatedPackage $outdatedPackage): int => Str::length($outdatedPackage->current), $entries);
+        $colWidths   = array_map(
+            static fn (OutdatedPackage $outdatedPackage): int => max(
+                0,
+                $outdatedPackage->patch instanceof VersionTarget ? Str::length($outdatedPackage->patch->version) : 0,
+                $outdatedPackage->minor instanceof VersionTarget ? Str::length($outdatedPackage->minor->version) : 0,
+                $outdatedPackage->major instanceof VersionTarget ? Str::length($outdatedPackage->major->version) : 0,
+            ),
+            $entries,
+        );
+
+        return [
+            'maxName' => max(0, ...$nameLengths),
+            'maxFrom' => max(0, ...$fromLengths),
+            'colW'    => max(5, ...$colWidths),
+        ];
+    }
+
+    /**
+     * @param list<OutdatedPackage> $entries
+     */
+    private function findFirstDevIndex(array $entries): int
+    {
+        foreach ($entries as $i => $entry) {
+            if ($entry->isDev) {
+                return $i;
+            }
+        }
+
+        return -1;
+    }
+
+    private function resolveFooterTarget(
+        UpgradePrompt $upgradePrompt,
+        OutdatedPackage $outdatedPackage,
+        ?BumpType $bumpType,
+    ): ?VersionTarget {
+        if ($upgradePrompt->isPickerActive) {
+            $cursorCol = $upgradePrompt->pickerColumns[$upgradePrompt->pickerCol] ?? null;
+
+            return $cursorCol instanceof PickerColumn
+                ? ($cursorCol->versions[$upgradePrompt->pickerRow] ?? null)
+                : null;
+        }
+
+        $selection = $upgradePrompt->selections[$outdatedPackage->name] ?? null;
+
+        return ($selection !== null && $selection->column === $bumpType)
+            ? $selection->target
+            : null;
+    }
+
+    /**
+     * Builds the URL lines (compare/release) and abandonment notice for the footer.
+     *
+     * @return list<string>
+     */
+    private function buildFooterLines(
+        OutdatedPackage $outdatedPackage,
+        ?BumpType $bumpType,
+        ?VersionTarget $versionTarget,
+        string $indent,
+    ): array {
+        $lines = [];
+
+        if ($bumpType instanceof BumpType) {
+            $color = self::BUMP_COLOR[$bumpType->value];
+            $urls  = (new ComposeUrlResolver($outdatedPackage))->resolve($bumpType, $versionTarget);
+
+            if ($urls->compareUrl !== null) {
+                $lines[] = $indent . $color . $this->visPad($bumpType->value, 5) . self::ANSI_RESET
+                    . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $urls->compareUrl . self::ANSI_RESET;
+            }
+
+            if ($urls->releaseUrl !== null) {
+                $lines[] = $indent . $color . $this->visPad('', 5) . self::ANSI_RESET
+                    . $indent . $this->dimStr('release') . $indent . self::ANSI_CYAN . $urls->releaseUrl . self::ANSI_RESET;
+            }
+        }
+
+        if ($outdatedPackage->abandonedBy !== null) {
+            $notice  = $outdatedPackage->abandonedBy !== ''
+                ? '⚠ abandoned · use ' . $outdatedPackage->abandonedBy . ' instead'
+                : '⚠ abandoned';
+            $lines[] = $indent . self::ANSI_YELLOW . $notice . self::ANSI_RESET;
+        }
+
+        return $lines;
+    }
+
+    /**
+     * Collects all conflict footer lines via two phases:
+     *   Phase 1 — static conflicts for other selected packages (active entry excluded).
+     *   Phase 2 — hover conflicts for the hovered version of the active entry.
+     * Deduplicates across phases and caps output at CONFLICT_FOOTER_MAX lines.
+     *
+     * @return list<string>
+     */
+    private function collectConflictLines(
+        UpgradePrompt $upgradePrompt,
+        OutdatedPackage $outdatedPackage,
+        string $hoveredVersionRaw,
+        string $indent,
+    ): array {
+        /** @var list<string> $lines */
+        $lines = [];
+        /** @var array<string, true> $seen */
+        $seen = [];
+
+        $updatableNames = array_map(
+            static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name,
+            $upgradePrompt->entries,
+        );
+
+        // Phase 1: conflicts for selected packages other than the active entry,
+        // filtered to exclude any conflict that mentions the active entry.
+        foreach ($upgradePrompt->selections as $selPkgName => $selection) {
+            if ($selection === null) {
+                continue;
+            }
+            if ($selPkgName === $outdatedPackage->name) {
+                continue;
+            }
+            foreach ($upgradePrompt->conflictMap->conflictsFor($selPkgName, $selection->target->versionRaw) as $reason) {
+                if ($reason->dependentPackage === $outdatedPackage->name) {
+                    continue;
+                }
+                if ($reason->requiredPackage === $outdatedPackage->name) {
+                    continue;
+                }
+                $line = $this->formatConflictLine($reason, $selPkgName, $updatableNames, $indent);
+
+                if (!isset($seen[$line])) {
+                    $seen[$line] = true;
+                    $lines[]     = $line;
+                }
+            }
+        }
+
+        // Phase 2: conflicts for the hovered version of the active entry.
+        if ($hoveredVersionRaw !== '') {
+            foreach ($upgradePrompt->conflictMap->conflictsFor($outdatedPackage->name, $hoveredVersionRaw) as $reason) {
+                $line = $this->formatConflictLine($reason, $outdatedPackage->name, $updatableNames, $indent);
+
+                if (!isset($seen[$line])) {
+                    $seen[$line] = true;
+                    $lines[]     = $line;
+                }
+            }
+        }
+
+        $overflowCount = count($lines) - self::CONFLICT_FOOTER_MAX;
+
+        if ($overflowCount > 0) {
+            $lines   = array_slice($lines, 0, self::CONFLICT_FOOTER_MAX);
+            $lines[] = $indent . $this->dimStr(
+                '… and ' . $overflowCount . ' more conflict' . ($overflowCount > 1 ? 's' : ''),
+            );
+        }
+
+        return $lines;
     }
 
     /**
