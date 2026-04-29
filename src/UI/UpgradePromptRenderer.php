@@ -344,6 +344,12 @@ final class UpgradePromptRenderer extends Renderer
         return self::ANSI_DIM . $s . self::ANSI_RESET;
     }
 
+    /** Wraps $text in an OSC 8 hyperlink so supporting terminals make it clickable. */
+    private function hyperlink(string $url, string $text): string
+    {
+        return "\e]8;;" . $url . "\e\\" . $text . "\e]8;;\e\\";
+    }
+
     private function visLen(string $s): int
     {
         return Str::length(Str::replace('/\e\[[0-9;]*m/', $s, ''));
@@ -432,12 +438,12 @@ final class UpgradePromptRenderer extends Renderer
 
             if ($urls->compareUrl !== null) {
                 $lines[] = $indent . $color . $this->visPad($bumpType->value, 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $urls->compareUrl . self::ANSI_RESET;
+                    . $indent . $this->dimStr('compare') . $indent . self::ANSI_CYAN . $this->hyperlink($urls->compareUrl, $urls->compareUrl) . self::ANSI_RESET;
             }
 
             if ($urls->releaseUrl !== null) {
                 $lines[] = $indent . $color . $this->visPad('', 5) . self::ANSI_RESET
-                    . $indent . $this->dimStr('release') . $indent . self::ANSI_CYAN . $urls->releaseUrl . self::ANSI_RESET;
+                    . $indent . $this->dimStr('release') . $indent . self::ANSI_CYAN . $this->hyperlink($urls->releaseUrl, $urls->releaseUrl) . self::ANSI_RESET;
             }
         }
 

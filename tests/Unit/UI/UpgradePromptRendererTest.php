@@ -15,7 +15,8 @@ afterEach(function (): void {
 
 function stripAnsi(string $s): string
 {
-    return (string) preg_replace('/\e\[[0-9;]*m/', '', $s);
+    $s = (string) preg_replace('/\e\[[0-9;]*m/', '', $s);            // SGR color codes
+    return (string) preg_replace('/\x1b\]8;;[^\x1b]*\x1b\\\\/', '', $s); // OSC 8 hyperlinks
 }
 
 function renderPrompt(UpgradePrompt $upgradePrompt): string
