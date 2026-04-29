@@ -44,6 +44,8 @@ final class UpgradePrompt extends Prompt
 
     public bool $isPickerActive = false;
 
+    public bool $isLoading = false;
+
     /** @var list<PickerColumn> */
     public array $pickerColumns = [];
 
@@ -61,6 +63,9 @@ final class UpgradePrompt extends Prompt
     private ?string $pickerPackageName = null;
 
     private ?VersionSelection $versionSelection = null;
+
+    /** @var array<string, list<VersionTarget>> key: "packageName|bumpType" */
+    private array $versionCache = [];
 
     /**
      * @param list<OutdatedPackage> $entries
@@ -219,7 +224,20 @@ final class UpgradePrompt extends Prompt
             return;
         }
 
-        $versions = $this->availableVersionsResolver->resolve($entry->name, $entry->currentRaw, $bumpType);
+        $cacheKey = $entry->name . '|' . $bumpType->value;
+
+        if (!isset($this->versionCache[$cacheKey])) {
+            $this->isLoading = true;
+            $this->render();
+
+            try {
+                $this->versionCache[$cacheKey] = $this->availableVersionsResolver->resolve($entry->name, $entry->currentRaw, $bumpType);
+            } finally {
+                $this->isLoading = false;
+            }
+        }
+
+        $versions = $this->versionCache[$cacheKey];
 
         if ($versions === []) {
             return;

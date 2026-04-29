@@ -125,6 +125,14 @@ function stripAnsiCodes(string $s): string
     \expect(\stripAnsiCodes($fmt->pickerExpandLabel(BumpType::Minor)))->toBe('minor ▾');
 });
 
+\it('loading returns spinner glyph and loading text', function (): void {
+    $fmt  = new AnsiFormatter();
+    $text = \stripAnsiCodes($fmt->loading());
+
+    \expect($text)->toContain('⠋')
+        ->and($text)->toContain('loading…');
+});
+
 // -------------------------------------------------------------------------
 // versionCell states
 // -------------------------------------------------------------------------
