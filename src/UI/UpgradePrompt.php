@@ -75,11 +75,12 @@ final class UpgradePrompt extends Prompt
         public readonly string                               $label = 'Select versions to update',
         private readonly ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
         private readonly ?CompatibilityCheckerInterface      $compatibilityChecker = null,
+        ?ConflictMap                        $initialConflictMap = null,
     ) {
         self::$themes['default'][self::class] = UpgradePromptRenderer::class;
 
         $this->required = false;
-        $this->conflictMap = ConflictMap::empty();
+        $this->conflictMap = $initialConflictMap ?? ConflictMap::empty();
 
         $this->selections = array_fill_keys(
             array_map(static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name, $entries),
@@ -376,22 +377,6 @@ final class UpgradePrompt extends Prompt
     private function recomputeConflictMap(): void
     {
         if (!$this->compatibilityChecker instanceof CompatibilityCheckerInterface) {
-            return;
-        }
-
-        $hasSelections = false;
-
-        foreach ($this->selections as $selection) {
-            if ($selection !== null) {
-                $hasSelections = true;
-
-                break;
-            }
-        }
-
-        if (!$hasSelections) {
-            $this->conflictMap = ConflictMap::empty();
-
             return;
         }
 

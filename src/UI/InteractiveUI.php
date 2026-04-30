@@ -6,6 +6,7 @@ namespace Hpbxxtr\UpgradeInteractive\UI;
 
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Override;
 
@@ -21,6 +22,7 @@ final readonly class InteractiveUI implements InteractiveUIInterface
     public function __construct(
         private ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
         private ?CompatibilityCheckerInterface $compatibilityChecker = null,
+        private ?ConflictMap $initialConflictMap = null,
     ) {}
 
     /**
@@ -35,6 +37,7 @@ final readonly class InteractiveUI implements InteractiveUIInterface
             $entries,
             availableVersionsResolver: $this->availableVersionsResolver,
             compatibilityChecker: $this->compatibilityChecker,
+            initialConflictMap: $this->initialConflictMap,
         );
         $upgradePrompt->prompt();
 
