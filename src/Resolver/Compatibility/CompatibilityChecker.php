@@ -141,11 +141,17 @@ final class CompatibilityChecker implements CompatibilityCheckerInterface
             return $this->metadataCache[$name][$versionRaw];
         }
 
-        $versionParser = new VersionParser();
-        $constraint = $versionParser->parseConstraints($versionRaw);
-        $found = array_values($this->repositorySet->findPackages($name, $constraint));
+        $package = null;
 
-        $package = $found !== [] ? $found[0] : null;
+        try {
+            $versionParser = new VersionParser();
+            $constraint    = $versionParser->parseConstraints($versionRaw);
+            $found         = array_values($this->repositorySet->findPackages($name, $constraint));
+            $package       = $found !== [] ? $found[0] : null;
+        } catch (\UnexpectedValueException) {
+            // Non-parseable version string (e.g. '9999999-dev') — treat package as not found.
+        }
+
         $this->metadataCache[$name][$versionRaw] = $package;
 
         return $package;

@@ -274,6 +274,20 @@ function mockComposerWithInstalled(array $installedPackages, array $devPackageNa
 // Dev-branch packages
 // ---------------------------------------------------------------------------
 
+\it('skips a package installed from a path repository (Composer sentinel version 9999999-dev)', function (): void {
+    // Composer assigns '9999999-dev' as the version for path-repository packages.
+    // It does not start with 'dev-', so the branch-alias guard misses it.
+    // The non-semver guard must catch it before computePatchConstraint generates ~9999999-dev.0.0.
+    $installed = new CompletePackage('vendor/path-pkg', '9999999-dev', '9999999-dev');
+
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$installed]),
+        \makeVersionSet([]),
+    ))->resolve();
+
+    \expect($packages)->toBe([]);
+});
+
 \it('returns no update for a dev-branch package when no newer candidate is found', function (): void {
     $installed = new CompletePackage('vendor/pkg', 'dev-main', 'dev-main');
 
