@@ -11,6 +11,7 @@ use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityChecker;
+use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
@@ -56,7 +57,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
     {
         $io = $this->getIO();
 
-        $installedVersions = [];
+        /** @var CompatibilityChecker|null $checker */
+        $checker = null;
+        /** @var ConflictMap|null $initialConflictMap */
+        $initialConflictMap = null;
 
         try {
             if ($this->packageResolver instanceof PackageResolverInterface) {
@@ -66,9 +70,17 @@ final class UpgradeInteractiveCommand extends BaseCommand
                 $composer = $this->requireComposer();
 
                 /** @var list<\Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage> $entries */
-                $entries = spin(fn (): array => (new PackageResolver($composer))->resolve(), 'Fetching package data…');
+                $entries = spin(function () use ($composer, &$checker, &$initialConflictMap): array {
+                    $resolved = (new PackageResolver($composer))->resolve();
 
-                $installedVersions = self::collectInstalledVersions($composer);
+                    if ($resolved !== []) {
+                        $installedVersions  = self::collectInstalledVersions($composer);
+                        $checker            = new CompatibilityChecker($composer, installedVersions: $installedVersions);
+                        $initialConflictMap = $checker->computeInitialConflicts($resolved);
+                    }
+
+                    return $resolved;
+                }, 'Fetching package data…');
             }
         } catch (Throwable $throwable) {
             $io->writeError('<error>' . $throwable->getMessage() . '</error>');
@@ -90,7 +102,8 @@ final class UpgradeInteractiveCommand extends BaseCommand
 
         $ui = $this->interactiveUI ?? new InteractiveUI(
             availableVersionsResolver: isset($composer) ? new AvailableVersionsResolver($composer) : null,
-            compatibilityChecker: isset($composer) ? new CompatibilityChecker($composer, installedVersions: $installedVersions) : null,
+            compatibilityChecker: $checker,
+            initialConflictMap: $initialConflictMap,
         );
 
         $selections = $ui->ask($entries);
@@ -101,8 +114,6 @@ final class UpgradeInteractiveCommand extends BaseCommand
             return 0;
         }
 
-        // getOption() returns mixed; !== false produces bool, isolating the mixed expression
-        // from the executor try block so it doesn't contaminate type coverage there.
         $isCaret = $input->getOption('caret') !== false;
 
         try {

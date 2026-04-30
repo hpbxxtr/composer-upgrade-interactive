@@ -989,12 +989,12 @@ afterEach(function (): void {
 });
 
 // ---------------------------------------------------------------------------
-// recomputeConflictMap — no-selection early return
+// recomputeConflictMap — deselect reruns against installed world
 // ---------------------------------------------------------------------------
 
-\it('recomputeConflictMap resets conflictMap to empty when the last selection is cleared', function (): void {
+\it('recomputeConflictMap reruns conflict check after the last selection is cleared', function (): void {
     // SPACE once selects (triggers recompute with one selection)
-    // SPACE again deselects (triggers recompute with zero selections)
+    // SPACE again deselects (triggers recompute with zero selections against installed world)
     Prompt::fake([Key::SPACE, Key::SPACE, "\n"]);
 
     $outdatedPackage = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
@@ -1005,8 +1005,8 @@ afterEach(function (): void {
     $prompt = new UpgradePrompt([$outdatedPackage], compatibilityChecker: $mock);
     $prompt->prompt();
 
-    // After deselecting the only package, conflictMap is reset to empty
-    \expect($prompt->conflictMap->isEmpty())->toBeTrue();
+    // After deselecting, checker reruns with empty otherSelections → no conflicts → compatible
+    \expect($prompt->conflictMap->isCompatible('vendor/pkg', '1.3.0'))->toBeTrue();
 });
 
 // ---------------------------------------------------------------------------

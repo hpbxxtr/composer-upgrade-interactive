@@ -110,6 +110,31 @@ final class CompatibilityChecker implements CompatibilityCheckerInterface
         return $conflicts;
     }
 
+    /**
+     * @param list<\Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage> $entries
+     */
+    public function computeInitialConflicts(array $entries): ConflictMap
+    {
+        /** @var array<string, array<string, list<ConflictReason>>> $data */
+        $data = [];
+
+        foreach ($entries as $entry) {
+            $targets = array_values(array_filter([$entry->patch, $entry->minor, $entry->major]));
+
+            foreach ($targets as $target) {
+                try {
+                    $conflicts = $this->checkCandidate($entry->name, $target, []);
+                } catch (\UnexpectedValueException) {
+                    $conflicts = [];
+                }
+
+                $data[$entry->name][$target->versionRaw] = $conflicts;
+            }
+        }
+
+        return new ConflictMap($data);
+    }
+
     private function fetchMetadata(string $name, string $versionRaw): ?PackageInterface
     {
         if (array_key_exists($name, $this->metadataCache) && array_key_exists($versionRaw, $this->metadataCache[$name])) {

@@ -469,4 +469,73 @@ describe('CompatibilityChecker', function (): void {
 
         expect($conflicts)->toBe([]);
     });
+
+    // ---------------------------------------------------------------------------
+    // computeInitialConflicts
+    // ---------------------------------------------------------------------------
+
+    it('computeInitialConflicts returns a ConflictMap with all entry versions populated as compatible', function (): void {
+        $completePackage = \makeCheckerPackage('vendor/pkg', '1.3.0');
+        $completePackage->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage]),
+        );
+
+        $outdatedPackage  = \outdatedPackageWithMinor('vendor/pkg', '1.0.0', '1.3.0');
+        $conflictMap = $checker->computeInitialConflicts([$outdatedPackage]);
+
+        expect($conflictMap->isCompatible('vendor/pkg', '1.3.0'))->toBeTrue();
+    });
+
+    it('computeInitialConflicts detects a conflict between a candidate and an installed dep', function (): void {
+        $completePackage     = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $depInst = \makeCheckerPackage('vendor/dep', '1.5.0');
+        $completePackage->setRequires(['vendor/dep' => \makeLink('vendor/pkg', 'vendor/dep', '^2.0')]);
+        $depInst->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage, $depInst]),
+            installedVersions: ['vendor/dep' => '1.5.0'],
+        );
+
+        $outdatedPackage  = \outdatedPackage('vendor/pkg', '1.0.0', major: VersionTarget::fromRaw('2.0.0'));
+        $conflictMap = $checker->computeInitialConflicts([$outdatedPackage]);
+
+        expect($conflictMap->isCompatible('vendor/pkg', '2.0.0'))->toBeFalse()
+            ->and($conflictMap->conflictsFor('vendor/pkg', '2.0.0'))->toHaveCount(1);
+    });
+
+    it('computeInitialConflicts returns empty ConflictMap when entries list is empty', function (): void {
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([]),
+        );
+
+        $conflictMap = $checker->computeInitialConflicts([]);
+
+        expect($conflictMap->isEmpty())->toBeTrue();
+    });
+
+    it('computeInitialConflicts catches UnexpectedValueException and treats the version as compatible', function (): void {
+        $vp  = new VersionParser();
+        $completePackage = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        // Link without prettyConstraint (5th arg omitted) → getPrettyConstraint() throws UnexpectedValueException
+        $link = new Link('vendor/pkg', 'vendor/dep', $vp->parseConstraints('^1.0'), Link::TYPE_REQUIRE);
+        $completePackage->setRequires(['vendor/dep' => $link]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage]),
+            installedVersions: ['vendor/dep' => '2.0.0'],
+        );
+
+        $outdatedPackage  = \outdatedPackage('vendor/pkg', '1.0.0', major: VersionTarget::fromRaw('2.0.0'));
+        $conflictMap = $checker->computeInitialConflicts([$outdatedPackage]);
+
+        // Exception was caught → treated as [] → compatible
+        expect($conflictMap->isCompatible('vendor/pkg', '2.0.0'))->toBeTrue();
+    });
 });
