@@ -227,6 +227,50 @@ function makeAvailRepoSet(array $packages): RepositorySet
 });
 
 // ---------------------------------------------------------------------------
+// Stability filter
+// ---------------------------------------------------------------------------
+
+\it('excludes pre-release versions that pass through a dev-stability repository', function (): void {
+    // A RepositorySet with 'stable' min-stability silently drops pre-release packages in
+    // findPackages(), so the stability continue (line 59) is never reached.
+    // Using 'dev' min-stability lets all packages through findPackages() and exercises
+    // the explicit stability guard inside the resolve() loop.
+    $packages = [
+        \makeAvailPackage('vendor/pkg', '1.3.0'),
+        \makeAvailPackage('vendor/pkg', '1.3.0-beta.1'),
+    ];
+    $repoSet = new RepositorySet('dev', []);
+    $repoSet->addRepository(new ArrayRepository($packages));
+
+    $resolver = new AvailableVersionsResolver(\Mockery::mock(Composer::class), $repoSet);
+    $result   = $resolver->resolve('vendor/pkg', '1.2.0', BumpType::Minor);
+
+    \expect($result)->toHaveCount(1)
+        ->and($result[0]->version)->toBe('1.3.0');
+});
+
+// ---------------------------------------------------------------------------
+// parseSegments failure inside loop
+// ---------------------------------------------------------------------------
+
+\it('skips a package whose pretty version passes the stability check but cannot be normalized', function (): void {
+    // '1.2.0.0' is a valid normalized version (so ArrayRepository accepts the package),
+    // but the prettyVersion 'not-a-version' has no numeric segments → normalize() throws
+    // UnexpectedValueException inside parseSegments() → line 65 (continue) is reached.
+    $weirdPkg = new CompletePackage('vendor/pkg', '1.2.0.0', 'not-a-version');
+    $completePackage = \makeAvailPackage('vendor/pkg', '1.1.0');
+
+    $repoSet = new RepositorySet('stable', []);
+    $repoSet->addRepository(new ArrayRepository([$weirdPkg, $completePackage]));
+
+    $resolver = new AvailableVersionsResolver(\Mockery::mock(Composer::class), $repoSet);
+    $result   = $resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor);
+
+    \expect($result)->toHaveCount(1)
+        ->and($result[0]->version)->toBe('1.1.0');
+});
+
+// ---------------------------------------------------------------------------
 // buildRepositorySet() — exercised when no RepositorySet is injected
 // ---------------------------------------------------------------------------
 

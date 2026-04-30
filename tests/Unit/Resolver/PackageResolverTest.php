@@ -287,6 +287,25 @@ function mockComposerWithInstalled(array $installedPackages, array $devPackageNa
 });
 
 // ---------------------------------------------------------------------------
+// computeMajorConstraint — null return for non-standard version format
+// ---------------------------------------------------------------------------
+
+\it('sets majorTarget to null when computeMajorConstraint cannot parse the version', function (): void {
+    // A package whose getVersion() returns a single-segment string ('1') has no dot,
+    // so computeMajorConstraint's regex fails → returns null → majorTarget stays null.
+    $installed = new CompletePackage('vendor/pkg', '1', '1');
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.1');
+
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$installed]),
+        \makeVersionSet([$completePackage]),
+    ))->resolve();
+
+    \expect($packages)->toHaveCount(1)
+        ->and($packages[0]->major)->toBeNull();
+});
+
+// ---------------------------------------------------------------------------
 // Non-direct dependency filtering
 // ---------------------------------------------------------------------------
 

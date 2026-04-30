@@ -62,15 +62,18 @@ final readonly class PackageResolver implements PackageResolverInterface
         $stabilityFlags   = $rootPackage->getStabilityFlags();
         $isPreferStable   = $rootPackage->getPreferStable();
 
-        $entries = [];
+        $directPackages = [];
 
         foreach ($this->composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
-            $name = $basePackage->getName();
-
-            // Direct dependencies only (replicates `composer outdated -D`)
-            if (!isset($directSet[$name])) {
-                continue;
+            if (isset($directSet[$basePackage->getName()])) {
+                $directPackages[] = $basePackage;
             }
+        }
+
+        $entries = [];
+
+        foreach ($directPackages as $directPackage) {
+            $name = $directPackage->getName();
 
             $pkgStability = $stability;
             if (isset($stabilityFlags[$name])) {
@@ -78,11 +81,11 @@ final readonly class PackageResolver implements PackageResolverInterface
                 $pkgStability = is_string($found) ? $found : $stability;
             }
 
-            $bestStability = $isPreferStable ? $basePackage->getStability() : $pkgStability;
+            $bestStability = $isPreferStable ? $directPackage->getStability() : $pkgStability;
 
             [$patchTarget, $minorTarget, $majorTarget] = $this->findTargets(
                 $versionSelector,
-                $basePackage,
+                $directPackage,
                 $bestStability,
             );
 
@@ -92,14 +95,14 @@ final readonly class PackageResolver implements PackageResolverInterface
 
             $entries[] = new OutdatedPackage(
                 name: $name,
-                current: Str::trimStart($basePackage->getPrettyVersion(), 'v'),
-                currentRaw: $basePackage->getPrettyVersion(),
+                current: Str::trimStart($directPackage->getPrettyVersion(), 'v'),
+                currentRaw: $directPackage->getPrettyVersion(),
                 patch: $patchTarget,
                 minor: $minorTarget,
                 major: $majorTarget,
                 isDev: isset($devSet[$name]),
-                repoUrl: $this->sourceUrl($basePackage),
-                abandonedBy: $this->abandonedBy($basePackage),
+                repoUrl: $this->sourceUrl($directPackage),
+                abandonedBy: $this->abandonedBy($directPackage),
             );
         }
 
@@ -140,14 +143,6 @@ final readonly class PackageResolver implements PackageResolverInterface
         // Deduplicate: same version reported across adjacent bump levels.
         if ($patchTarget instanceof VersionTarget && $minorTarget instanceof VersionTarget && $patchTarget->version === $minorTarget->version) {
             $minorTarget = null;
-        }
-
-        if ($minorTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $minorTarget->version === $majorTarget->version) {
-            $minorTarget = null;
-        }
-
-        if ($patchTarget instanceof VersionTarget && $majorTarget instanceof VersionTarget && $patchTarget->version === $majorTarget->version) {
-            $majorTarget = null;
         }
 
         return [$patchTarget, $minorTarget, $majorTarget];
