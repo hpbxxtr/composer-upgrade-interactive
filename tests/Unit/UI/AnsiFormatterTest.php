@@ -133,6 +133,12 @@ function stripAnsiCodes(string $s): string
         ->and($text)->toContain('loading…');
 });
 
+\it('pickerVersion returns a dim-wrapped version string', function (): void {
+    $fmt = new AnsiFormatter();
+
+    \expect($fmt->pickerVersion('1.2.3'))->toBe($fmt->dim('1.2.3'));
+});
+
 // -------------------------------------------------------------------------
 // versionCell states
 // -------------------------------------------------------------------------
