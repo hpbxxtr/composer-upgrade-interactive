@@ -61,10 +61,11 @@ final readonly class PackageResolver implements PackageResolverInterface
         $stability        = $rootPackage->getMinimumStability();
         $stabilityFlags   = $rootPackage->getStabilityFlags();
         $isPreferStable   = $rootPackage->getPreferStable();
+        $basePackages       = $this->composer->getRepositoryManager()->getLocalRepository()->getPackages();
 
         $directPackages = [];
 
-        foreach ($this->composer->getRepositoryManager()->getLocalRepository()->getPackages() as $basePackage) {
+        foreach ($basePackages as $basePackage) {
             if (isset($directSet[$basePackage->getName()])) {
                 $directPackages[] = $basePackage;
             }
@@ -127,10 +128,17 @@ final readonly class PackageResolver implements PackageResolverInterface
         if (Str::startsWith($version, 'dev-')) {
             $candidate = $versionSelector->findBestCandidate($package->getName(), $version, $bestStability);
             $target    = ($candidate !== false && $candidate->getVersion() !== $version)
-                ? VersionTarget::fromRaw($candidate->getPrettyVersion())
+                ? VersionTarget::fromRaw($candidate->getPrettyVersion()) // @codeCoverageIgnore
                 : null;
 
             return [null, $target, null];
+        }
+
+        // Skip versions where a stability suffix precedes the first dot — the Composer
+        // path-repository sentinel '9999999-dev' is the primary case. computePatchConstraint()
+        // would pad it to '9999999-dev.0.0', which Composer cannot parse as a constraint.
+        if (Preg::isMatch('{^\d+-}', $version)) {
+            return [null, null, null];
         }
 
         $patchTarget = $this->candidateTarget($versionSelector, $package->getName(), $this->computePatchConstraint($version), $version, $bestStability);

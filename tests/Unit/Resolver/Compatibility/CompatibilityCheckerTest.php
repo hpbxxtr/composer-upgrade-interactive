@@ -452,6 +452,23 @@ describe('CompatibilityChecker', function (): void {
         expect($conflicts)->toBe([]);
     });
 
+    it('handles a non-parseable version in installedVersions without crashing (e.g. 9999999-dev)', function (): void {
+        // Path-repository packages carry version '9999999-dev'. That string may not parse as a
+        // Composer constraint; fetchMetadata must catch the exception and return null.
+        $completePackage = \makeCheckerPackage('vendor/pkg', '2.0.0');
+        $completePackage->setRequires([]);
+
+        $checker = new CompatibilityChecker(
+            \Mockery::mock(\Composer\Composer::class),
+            \makeCheckerRepoSet([$completePackage]),
+            installedVersions: ['vendor/path-pkg' => '9999999-dev'],
+        );
+
+        $conflicts = $checker->checkCandidate('vendor/pkg', VersionTarget::fromRaw('2.0.0'), []);
+
+        expect($conflicts)->toBe([]);
+    });
+
     it('skips backward check for an installed package that does not require the candidate', function (): void {
         // vendor/unrelated is installed and requires vendor/other, not vendor/pkg — must be skipped
         $completePackage  = \makeCheckerPackage('vendor/pkg', '2.0.0');
