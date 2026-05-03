@@ -537,10 +537,10 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 });
 
 // ---------------------------------------------------------------------------
-// Compatibility: ✗ markers in picker
+// Compatibility: ! markers in picker
 // ---------------------------------------------------------------------------
 
-\it('renders ✗ on an incompatible version in the picker (not cursor)', function (): void {
+\it('renders ! on an incompatible version in the picker (not cursor)', function (): void {
     Prompt::fake(["\n"]);
 
     $outdatedPackage = \outdatedPackageWithMinor();
@@ -564,10 +564,10 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    \expect($output)->toContain('1.3.0 ✗');
+    \expect($output)->toContain('!1.3.0');
 });
 
-\it('renders ✗ on an incompatible version in the picker when it is the cursor', function (): void {
+\it('renders ! on an incompatible version in the picker when it is the cursor', function (): void {
     Prompt::fake(["\n"]);
 
     $outdatedPackage = \outdatedPackageWithMinor();
@@ -588,12 +588,11 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    \expect($output)->toContain('▸ 1.3.0')
-        ->and($output)->toContain('✗')
+    \expect($output)->toContain('▸ !1.3.0')
     ;
 });
 
-\it('renders picker without ✗ when all versions are compatible', function (): void {
+\it('renders picker without ! when all versions are compatible', function (): void {
     Prompt::fake(["\n"]);
 
     $outdatedPackage = \outdatedPackageWithMinor();
@@ -613,7 +612,7 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     $output = \stripAnsi(\renderPrompt($prompt));
 
-    \expect($output)->not->toContain('✗');
+    \expect($output)->not->toContain('!');
 });
 
 // ---------------------------------------------------------------------------

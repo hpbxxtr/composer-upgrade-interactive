@@ -179,13 +179,13 @@ final readonly class AnsiFormatter
     ): string {
         return match (true) {
             $isCursor && !$isCompatible
-                => self::BG_BLUE . self::WHITE . '▸ ' . $version . self::RESET . ' ' . self::DIM . '✗' . self::RESET . $suffix,
+                => self::BG_BLUE . self::WHITE . '▸ !' . $version . self::RESET . ' ' . self::DIM . self::RESET . $suffix,
             $isCursor
-                => self::BG_BLUE . self::WHITE . '▸ ' . $version . self::RESET . $suffix,
+                => self::BG_BLUE . self::WHITE . '▸  ' . $version . self::RESET . $suffix,
             !$isCompatible
-                => '  ' . self::DIM . $version . ' ✗' . self::RESET,
+                => '  !' . self::DIM . $version . self::RESET,
             default
-                => '  ' . $this->dim($version) . $suffix,
+                => '   ' . $this->dim($version) . $suffix,
         };
     }
 }

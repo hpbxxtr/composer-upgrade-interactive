@@ -179,15 +179,14 @@ function stripAnsiCodes(string $s): string
     $fmt  = new AnsiFormatter();
     $text = \stripAnsiCodes($fmt->pickerRow(true, true, '1.0.0', ''));
 
-    \expect($text)->toBe('▸ 1.0.0');
+    \expect($text)->toBe('▸  1.0.0');
 });
 
 \it('pickerRow cursor+incompatible shows arrow and cross mark', function (): void {
     $fmt  = new AnsiFormatter();
     $text = \stripAnsiCodes($fmt->pickerRow(true, false, '1.0.0', ''));
 
-    \expect($text)->toContain('▸ 1.0.0')
-        ->and($text)->toContain('✗');
+    \expect($text)->toContain('▸ !1.0.0');
 });
 
 \it('pickerRow incompatible shows cross mark without cursor', function (): void {
@@ -195,7 +194,7 @@ function stripAnsiCodes(string $s): string
     $text = \stripAnsiCodes($fmt->pickerRow(false, false, '1.0.0', ''));
 
     \expect($text)->toContain('1.0.0')
-        ->and($text)->toContain('✗')
+        ->and($text)->toContain('!')
         ->and($text)->not->toContain('▸');
 });
 
