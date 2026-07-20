@@ -24,7 +24,7 @@
   },
   "require-dev": {
     "brnshkr/config": "dev-php83",
-    "composer/composer": "2.10.1",
+    "composer/composer": "2.10.2",
     "friendsofphp/php-cs-fixer": "3.95.4",
     "kubawerlos/php-cs-fixer-custom-fixers": "3.37.2",
     "mockery/mockery": "1.6.12",
