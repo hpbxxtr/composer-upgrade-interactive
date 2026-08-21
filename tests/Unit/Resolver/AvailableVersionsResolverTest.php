@@ -292,3 +292,31 @@ function makeAvailRepoSet(array $packages): RepositorySet
     // Empty repo → no matching packages → empty result
     \expect($resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor))->toBe([]);
 });
+
+// ---------------------------------------------------------------------------
+// Release dates
+// ---------------------------------------------------------------------------
+
+\it('carries release dates onto the resolved targets', function (): void {
+    $completePackage = \makeAvailPackage('vendor/pkg', '1.2.0');
+    $completePackage->setReleaseDate(new DateTime('2026-08-18 09:00:00'));
+    $older = \makeAvailPackage('vendor/pkg', '1.1.0');
+    $older->setReleaseDate(new DateTime('2026-01-02 09:00:00'));
+
+    $resolver = new AvailableVersionsResolver(\Mockery::mock(Composer::class), \makeAvailRepoSet([$completePackage, $older]));
+    $result   = $resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor);
+
+    \expect($result[0]->version)->toBe('1.2.0')
+        ->and($result[0]->releaseDate?->format('Y-m-d'))->toBe('2026-08-18')
+        ->and($result[1]->releaseDate?->format('Y-m-d'))->toBe('2026-01-02')
+    ;
+});
+
+\it('leaves the release date null when the repository has no date', function (): void {
+    $resolver = new AvailableVersionsResolver(
+        \Mockery::mock(Composer::class),
+        \makeAvailRepoSet([\makeAvailPackage('vendor/pkg', '1.2.0')]),
+    );
+
+    \expect($resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor)[0]->releaseDate)->toBeNull();
+});

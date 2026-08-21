@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\Core;
 
+use function max;
 use function mb_str_pad;
 use function mb_strlen;
+use function mb_strtolower;
+use function mb_substr;
 use function preg_replace;
 use function str_repeat;
 use function str_starts_with;
@@ -44,6 +47,21 @@ final class Str
     public static function padRight(string $string, int $length, string $padString = ' '): string
     {
         return self::pad($string, $length, $padString, false);
+    }
+
+    /**
+     * Removes the last $count characters.
+     */
+    public static function dropLast(string $string, int $count = 1): string
+    {
+        // @phpstan-ignore symplify.forbiddenFuncCall (Avoid using symfony/string)
+        return mb_substr($string, 0, max(0, self::length($string) - $count));
+    }
+
+    public static function lower(string $string): string
+    {
+        // @phpstan-ignore symplify.forbiddenFuncCall (Avoid using symfony/string)
+        return mb_strtolower($string);
     }
 
     public static function trim(string $string, string $characters = " \t\n\r\0\x0B"): string

@@ -573,3 +573,20 @@ function mockComposerWithInstalled(array $installedPackages, array $devPackageNa
     \expect($packages[0]->current)->toBe('1.2.3');
     \expect($packages[0]->currentRaw)->toBe('v1.2.3');
 });
+
+// ---------------------------------------------------------------------------
+// Release dates
+// ---------------------------------------------------------------------------
+
+\it('carries the candidate release date onto the bump target', function (): void {
+    $completePackage = \makeInstalledPackage('vendor/pkg', '1.0.0');
+    $available = \makeInstalledPackage('vendor/pkg', '1.1.0');
+    $available->setReleaseDate(new DateTime('2026-08-19 07:00:00'));
+
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([$completePackage]),
+        \makeVersionSet([$available]),
+    ))->resolve();
+
+    \expect($packages[0]->minor?->releaseDate?->format('Y-m-d'))->toBe('2026-08-19');
+});

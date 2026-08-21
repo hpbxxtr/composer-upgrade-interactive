@@ -77,6 +77,7 @@ Navigate to a package, move across the patch/minor/major columns with the arrow 
 | Option | Description |
 |---|---|
 | `--caret` | Write a caret range constraint (e.g. `^1.2.3`) instead of an exact version (`1.2.3`) |
+| `--min-age=<duration>` | Minimum release age before a version may be selected. Accepts `7d`, `2w`, `3m`, `1y` or a bare number of days (`14`). `0` disables the gate. |
 
 **Example — pin exact versions (default):**
 ```bash
@@ -89,6 +90,58 @@ composer h:ui
 composer h:ui --caret
 # writes: "vendor/pkg": "^1.2.3"
 ```
+
+**Example — skip releases younger than two weeks:**
+```bash
+composer h:ui --min-age=2w
+```
+
+---
+
+## ⏳ Minimum release age
+
+A release published minutes ago is the riskiest one to install. `--min-age` defines a cooldown:
+versions younger than the threshold stay visible but cannot be selected. They are marked with `⊘`,
+and the footer explains why (`released 3 days ago · blocked by min age 7d`).
+
+Set a project-wide default in `composer.json` — the CLI option always wins over it:
+
+```json
+{
+    "extra": {
+        "hpbxxtr-upgrade-interactive": {
+            "minimum-release-age": "7d"
+        }
+    }
+}
+```
+
+Press `a` inside the TUI to edit the threshold. The field opens prefilled with the current value;
+type any duration the option accepts, then `enter` to apply, `esc` to discard, `ctrl+u` to clear.
+An empty value turns the gate off. An unparsable value keeps the field open and shows why.
+
+```
+  min age  ▸ 2w▏
+           type a duration (7d · 2w · 3m · 1y) · enter apply · esc cancel · ctrl+u clear · empty = off
+```
+
+Tightening the threshold drops selections it no longer allows; loosening it makes previously blocked
+versions selectable again. Nothing is re-fetched — every displayed version already carries its
+release date.
+
+Details worth knowing:
+
+- Release dates come from the repository metadata (`time` in Packagist v2 metadata). No extra
+  requests are made.
+- A version with **no** release date — path repositories, some private VCS repositories,
+  `dev-*` branches — is treated as **eligible**. The gate never hides a package just because its
+  repository omits the field; such targets show `release date unknown`.
+- Units are fixed lengths: `1w` = 7 days, `1m` = 30 days, `1y` = 365 days.
+- The threshold applies to the **direct** dependencies listed in the table. Applying the upgrades
+  runs `composer update --with-all-dependencies`, so transitive dependencies still resolve to their
+  newest matching versions — Composer offers no knob to constrain them.
+- Packagist reports the tag publication time. Re-tagging a release resets it. Treat this as a
+  cooldown, not a supply-chain guarantee.
 
 ---
 
@@ -104,6 +157,7 @@ composer h:ui --caret
 | `→` / `l` / `Ctrl+F` | Move right (next bump column) |
 | `space` | Toggle selection (latest version for focused bump) |
 | `v` | Open version picker for the focused cell |
+| `a` | Edit the minimum release age (type `7d`, `2w`, `3m`, `1y`, `14`; empty applies *off*) |
 | `enter` | Confirm and apply upgrades |
 | `Ctrl+C` | Cancel |
 
@@ -114,6 +168,7 @@ composer h:ui --caret
 | `↑` / `↓` | Navigate versions within the current column |
 | `←` / `→` | Switch between version columns (oldest left, newest right) |
 | `space` | Select the highlighted version and close picker |
+| `a` | Edit the minimum release age |
 | `esc` / `←` at first column | Close picker without changing selection |
 
 ---
@@ -125,7 +180,8 @@ composer h:ui --caret
 3. **Table** — one row per outdated package, three columns for patch / minor / major. Cells marked `!` indicate conflicts with the current state; the footer explains the broken dependency chain.
 4. **Version picker** — pressing `v` on any cell fetches all stable releases for that bump level from Packagist and renders them as a side-by-side column picker, grouped by series (e.g. `1.4.x`, `1.3.x`). Each version is checked for compatibility before the picker opens.
 5. **Live conflict recheck** — every time a selection changes, all visible versions are re-evaluated against the updated effective world (see below).
-6. **Apply** — writes updated constraints to `composer.json` (exact version by default, caret range with `--caret`) then runs `composer update --with-all-dependencies` for all selected packages in one pass.
+6. **Age gate** — when a minimum release age is configured, versions younger than the threshold are marked `⊘` and refuse selection (see [Minimum release age](#-minimum-release-age)).
+7. **Apply** — writes updated constraints to `composer.json` (exact version by default, caret range with `--caret`) then runs `composer update --with-all-dependencies` for all selected packages in one pass.
 
 ### Conflict detection
 

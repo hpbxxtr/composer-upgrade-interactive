@@ -6,9 +6,13 @@ namespace Hpbxxtr\UpgradeInteractive\Command;
 
 use Composer\Composer;
 use Composer\Command\BaseCommand;
+use InvalidArgumentException;
 use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
+use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\AgeThresholdResolver;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityChecker;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
@@ -18,6 +22,7 @@ use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUIInterface;
 use Override;
 
+use function is_string;
 use function Laravel\Prompts\spin;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -49,6 +54,12 @@ final class UpgradeInteractiveCommand extends BaseCommand
                 mode: InputOption::VALUE_NONE,
                 description: 'Use caret (^) version range instead of exact version (e.g. ^1.2.3 instead of 1.2.3)',
             )
+            ->addOption(
+                name: 'min-age',
+                shortcut: null,
+                mode: InputOption::VALUE_REQUIRED,
+                description: 'Minimum release age before a version may be selected, e.g. 7d, 2w, 3m, 1y or a number of days',
+            )
         ;
     }
 
@@ -56,6 +67,14 @@ final class UpgradeInteractiveCommand extends BaseCommand
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
         $io = $this->getIO();
+
+        try {
+            $releaseAgePolicy = new ReleaseAgePolicy($this->resolveAgeThreshold($input));
+        } catch (InvalidArgumentException $invalidArgumentException) {
+            $io->writeError('<error>' . $invalidArgumentException->getMessage() . '</error>');
+
+            return 1;
+        }
 
         /** @var CompatibilityChecker|null $checker */
         $checker = null;
@@ -104,6 +123,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
             availableVersionsResolver: isset($composer) ? new AvailableVersionsResolver($composer) : null,
             compatibilityChecker: $checker,
             initialConflictMap: $initialConflictMap,
+            releaseAgePolicy: $releaseAgePolicy,
         );
 
         $selections = $ui->ask($entries);
@@ -127,6 +147,22 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         return 0;
+    }
+
+    /**
+     * CLI option first, then the root package's extra section.
+     *
+     * @throws InvalidArgumentException on a malformed threshold
+     */
+    private function resolveAgeThreshold(InputInterface $input): ?Duration
+    {
+        $option = $input->getOption('min-age');
+
+        if (is_string($option) && $option !== '') {
+            return AgeThresholdResolver::resolve($option);
+        }
+
+        return AgeThresholdResolver::resolve(null, $this->tryComposer()?->getPackage()->getExtra() ?? []);
     }
 
     /**

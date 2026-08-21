@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
@@ -23,6 +24,7 @@ final readonly class InteractiveUI implements InteractiveUIInterface
         private ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
         private ?CompatibilityCheckerInterface $compatibilityChecker = null,
         private ?ConflictMap $initialConflictMap = null,
+        private ?ReleaseAgePolicy $releaseAgePolicy = null,
     ) {}
 
     /**
@@ -38,6 +40,7 @@ final readonly class InteractiveUI implements InteractiveUIInterface
             availableVersionsResolver: $this->availableVersionsResolver,
             compatibilityChecker: $this->compatibilityChecker,
             initialConflictMap: $this->initialConflictMap,
+            releaseAgePolicy: $this->releaseAgePolicy,
         );
         $upgradePrompt->prompt();
 

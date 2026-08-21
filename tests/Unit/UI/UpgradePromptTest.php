@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
@@ -1032,3 +1034,316 @@ afterEach(function (): void {
     \expect($prompt->pickerVersionCompatibility['1.3.0'] ?? null)->toBeTrue();
 });
 
+
+// ---------------------------------------------------------------------------
+// Minimum release age
+// ---------------------------------------------------------------------------
+
+function agePolicy(?string $threshold, string $now = '2026-08-20 12:00:00'): ReleaseAgePolicy
+{
+    return new ReleaseAgePolicy(
+        $threshold === null ? null : Duration::parse($threshold),
+        new DateTimeImmutable($now),
+    );
+}
+
+/**
+ * Package whose only target was released $date, i.e. blockable by an age threshold.
+ */
+function outdatedPackageReleasedAt(string $date, string $name = 'vendor/pkg'): OutdatedPackage
+{
+    return \outdatedPackage(
+        name: $name,
+        current: '1.2.3',
+        minor: VersionTarget::fromRaw('1.3.0', new DateTimeImmutable($date)),
+    );
+}
+
+\it('refuses to select a target younger than the threshold', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([]);
+});
+
+\it('explains why a selection was refused', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->blockedReason)->toContain('vendor/pkg 1.3.0')
+        ->and($prompt->blockedReason)->toContain('1 day ago')
+        ->and($prompt->blockedReason)->toContain('7d')
+    ;
+});
+
+\it('selects a target older than the threshold', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-07-01 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0'])
+        ->and($prompt->blockedReason)->toBeNull()
+    ;
+});
+
+\it('selects a target with an unknown release date', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0')],
+        releaseAgePolicy: \agePolicy('30d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+\it('clears the refusal notice on the next keypress', function (): void {
+    Prompt::fake([Key::SPACE, Key::DOWN_ARROW, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00'), \outdatedPackageReleasedAt('2026-08-19 12:00:00', 'vendor/b')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->blockedReason)->toBeNull();
+});
+
+\it('opens the age input prefilled with the active threshold', function (): void {
+    Prompt::fake(['a', Key::ESCAPE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('7d');
+});
+
+\it('opens the age input empty when the gate is off', function (): void {
+    Prompt::fake(['a', '2', 'w', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('2w');
+});
+
+\it('applies a typed threshold on enter', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, '1', '0', 'd', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('10d')
+        ->and($prompt->isAgeInputActive)->toBeFalse()
+        ->and($prompt->ageInput)->toBe('')
+    ;
+});
+
+\it('edits the prefilled value with backspace', function (): void {
+    // '7d' → backspace → '7' → 'w' → '7w'
+    Prompt::fake(['a', Key::BACKSPACE, 'w', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('7w');
+});
+
+\it('accepts long unit names typed into the input', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, '3', ' ', 'm', 'o', 'n', 't', 'h', 's', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('3m');
+});
+
+\it('ignores input beyond the length cap', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, '1', '1', '1', '1', '1', '1', '1', '1', '1', '1', '2', Key::ESCAPE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+    $prompt->prompt();
+
+    // The trailing '2' was dropped, so nothing was applied and the field closed on esc.
+    \expect($prompt->releaseAgePolicy->label())->toBe('off');
+});
+
+\it('keeps the input open and reports why when the value cannot be parsed', function (): void {
+    // Ctrl+C ends the prompt without closing the field, so its state stays inspectable.
+    Prompt::fake(['a', Key::CTRL_U, 's', 'o', 'o', 'n', "\n", Key::CTRL_C]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->isAgeInputActive)->toBeTrue()
+        ->and($prompt->ageInput)->toBe('soon')
+        ->and($prompt->ageInputError)->toContain('Invalid duration "soon"')
+        ->and($prompt->releaseAgePolicy->label())->toBe('7d')
+    ;
+});
+
+\it('clears the parser error once the value changes', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, 'x', "\n", Key::BACKSPACE, Key::ESCAPE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->ageInputError)->toBeNull()
+        ->and($prompt->releaseAgePolicy->label())->toBe('7d')
+    ;
+});
+
+\it('discards the typed value on esc', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, '3', '0', 'd', Key::ESCAPE, "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('7d')
+        ->and($prompt->isAgeInputActive)->toBeFalse()
+    ;
+});
+
+\it('disables the gate when an empty value is applied', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, "\n", Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('off')
+        ->and($prompt->value())->toBe(['vendor/pkg' => '1.3.0'])
+    ;
+});
+
+\it('does not navigate the table while the age input is open', function (): void {
+    Prompt::fake(['a', Key::DOWN_ARROW, Key::ESCAPE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor('vendor/a'), \outdatedPackageWithMinor('vendor/b')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->activeRow)->toBe(0);
+});
+
+\it('ignores unrecognised keys in the age input', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, '5', 'd', Key::TAB, "\n", "\n"]);
+
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()], releaseAgePolicy: \agePolicy('7d'));
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('5d');
+});
+
+\it('drops selections that a stricter threshold no longer allows', function (): void {
+    Prompt::fake([Key::SPACE, 'a', Key::CTRL_U, '3', '0', 'd', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-11 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->releaseAgePolicy->label())->toBe('30d')
+        ->and($prompt->value())->toBe([])
+    ;
+});
+
+\it('keeps selections that a stricter threshold still allows', function (): void {
+    Prompt::fake([Key::SPACE, 'a', Key::CTRL_U, '3', '0', 'd', "\n", "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-01-01 12:00:00')],
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+\it('defaults to a disabled age policy', function (): void {
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor()]);
+
+    \expect($prompt->releaseAgePolicy->isEnabled())->toBeFalse();
+});
+
+\it('refuses to select a too-new version from the picker', function (): void {
+    Prompt::fake(['v', Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1', new DateTimeImmutable('2026-08-19 12:00:00')),
+        VersionTarget::fromRaw('1.3.0', new DateTimeImmutable('2026-01-05 12:00:00')),
+    ]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor()],
+        availableVersionsResolver: $mock,
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([])
+        ->and($prompt->blockedReason)->toContain('1.3.1')
+    ;
+});
+
+\it('selects an old enough version from the picker', function (): void {
+    Prompt::fake(['v', Key::DOWN_ARROW, Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1', new DateTimeImmutable('2026-08-19 12:00:00')),
+        VersionTarget::fromRaw('1.3.0', new DateTimeImmutable('2026-01-05 12:00:00')),
+    ]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor()],
+        availableVersionsResolver: $mock,
+        releaseAgePolicy: \agePolicy('7d'),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe(['vendor/pkg' => '1.3.0']);
+});
+
+\it('applies a typed threshold while the picker is open', function (): void {
+    Prompt::fake(['v', 'a', Key::CTRL_U, '7', 'd', "\n", Key::SPACE, "\n"]);
+
+    $mock = \Mockery::mock(AvailableVersionsResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([
+        VersionTarget::fromRaw('1.3.1', new DateTimeImmutable('2026-08-19 12:00:00')),
+    ]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor()],
+        availableVersionsResolver: $mock,
+        releaseAgePolicy: \agePolicy('3d'),
+    );
+    $prompt->prompt();
+
+    // Picker survives the input; 1.3.1 is one day old, so 7d now blocks it.
+    \expect($prompt->releaseAgePolicy->label())->toBe('7d')
+        ->and($prompt->isPickerActive)->toBeTrue()
+        ->and($prompt->value())->toBe([])
+    ;
+});

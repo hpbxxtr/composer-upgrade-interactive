@@ -43,8 +43,9 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
             return [];
         }
 
-        $seen        = [];
-        $rawVersions = [];
+        $seen         = [];
+        $rawVersions  = [];
+        $releaseDates = [];
 
         foreach ($repoSet->findPackages($packageName) as $basePackage) {
             $rawVersion = $basePackage->getPrettyVersion();
@@ -69,11 +70,15 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
                 continue;
             }
 
-            $rawVersions[] = $rawVersion;
+            $rawVersions[]              = $rawVersion;
+            $releaseDates[$rawVersion]  = VersionTarget::releaseDateOf($basePackage);
         }
 
         return array_map(
-            VersionTarget::fromRaw(...),
+            static fn (string $rawVersion): VersionTarget => VersionTarget::fromRaw(
+                $rawVersion,
+                $releaseDates[$rawVersion] ?? null,
+            ),
             Semver::rsort($rawVersions),
         );
     }

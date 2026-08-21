@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
+use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Core\RelativeTime;
+use Hpbxxtr\UpgradeInteractive\Core\Str;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityCheckerInterface;
@@ -16,6 +20,8 @@ use Laravel\Prompts\Key;
 use Laravel\Prompts\Prompt;
 use Override;
 
+use DateTimeImmutable;
+use InvalidArgumentException;
 use UnexpectedValueException;
 use function array_fill_keys;
 use function array_filter;
@@ -27,6 +33,7 @@ use function explode;
 use function in_array;
 use function max;
 use function min;
+use function sprintf;
 
 /**
  * @internal
@@ -55,7 +62,25 @@ final class UpgradePrompt extends Prompt
 
     public ?BumpType $pickerBumpType = null;
 
+    /** Longest duration string the age input accepts, e.g. "12 months". */
+    private const int AGE_INPUT_MAX_LENGTH = 10;
+
     public ConflictMap $conflictMap;
+
+    public ReleaseAgePolicy $releaseAgePolicy;
+
+    /**
+     * Why the last selection attempt was refused; cleared on the next keypress.
+     */
+    public ?string $blockedReason = null;
+
+    public bool $isAgeInputActive = false;
+
+    /** Duration string being typed into the age input. */
+    public string $ageInput = '';
+
+    /** Parser message for the current age input; null while it is valid. */
+    public ?string $ageInputError = null;
 
     /** @var array<string, bool> versionRaw → isCompatible */
     public array $pickerVersionCompatibility = [];
@@ -76,11 +101,13 @@ final class UpgradePrompt extends Prompt
         private readonly ?AvailableVersionsResolverInterface $availableVersionsResolver = null,
         private readonly ?CompatibilityCheckerInterface      $compatibilityChecker = null,
         ?ConflictMap                        $initialConflictMap = null,
+        ?ReleaseAgePolicy                   $releaseAgePolicy = null,
     ) {
         self::$themes['default'][self::class] = UpgradePromptRenderer::class;
 
         $this->required = false;
         $this->conflictMap = $initialConflictMap ?? ConflictMap::empty();
+        $this->releaseAgePolicy = $releaseAgePolicy ?? new ReleaseAgePolicy();
 
         $this->selections = array_fill_keys(
             array_map(static fn (OutdatedPackage $outdatedPackage): string => $outdatedPackage->name, $entries),
@@ -113,6 +140,14 @@ final class UpgradePrompt extends Prompt
 
     private function handleKey(string $key): void
     {
+        $this->clearBlockedReason($key);
+
+        if ($this->isAgeInputActive) {
+            $this->handleAgeInputKey($key);
+
+            return;
+        }
+
         if ($this->isPickerActive) {
             $this->handlePickerKey($key);
 
@@ -126,6 +161,7 @@ final class UpgradePrompt extends Prompt
             in_array($key, [Key::RIGHT, Key::RIGHT_ARROW, Key::CTRL_F], true) => $this->moveCol(1),
             $key === Key::SPACE                                                => $this->toggleSelection(),
             $key === 'v'                                                       => $this->openPicker(),
+            $key === 'a'                                                       => $this->openAgeInput(),
             $key === "\n" || $key === "\r"                                     => $this->submit(),
             $key === Key::CTRL_C                                               => $this->cancelPrompt(),
             default                                                            => false, // ignore unrecognised keys
@@ -134,17 +170,33 @@ final class UpgradePrompt extends Prompt
 
     private function handlePickerKey(string $key): void
     {
+        $this->clearBlockedReason($key);
+
         match (true) {
             in_array($key, [Key::UP, Key::UP_ARROW, Key::CTRL_P], true)       => $this->pickerNavigate(-1),
             in_array($key, [Key::DOWN, Key::DOWN_ARROW, Key::CTRL_N], true)   => $this->pickerNavigate(1),
             in_array($key, [Key::RIGHT, Key::RIGHT_ARROW, Key::CTRL_F], true) => $this->pickerMoveCol(1),
             in_array($key, [Key::LEFT, Key::LEFT_ARROW, Key::CTRL_B], true)   => $this->pickerMoveCol(-1),
             $key === Key::SPACE                                                => $this->pickerSelect(),
+            $key === 'a'                                                       => $this->openAgeInput(),
             $key === Key::ESCAPE                                               => $this->pickerCancel(),
             $key === "\n" || $key === "\r"                                     => $this->submit(),
             $key === Key::CTRL_C                                               => $this->cancelPrompt(),
             default                                                            => false,
         };
+    }
+
+    /**
+     * A refusal notice survives submit so callers can inspect it, but any key that
+     * keeps the prompt alive dismisses it.
+     */
+    private function clearBlockedReason(string $key): void
+    {
+        if (in_array($key, ["\n", "\r", Key::CTRL_C], true)) {
+            return;
+        }
+
+        $this->blockedReason = null;
     }
 
     private function moveRow(int $direction): void
@@ -192,6 +244,14 @@ final class UpgradePrompt extends Prompt
             $target = $entry->target($col);
 
             if ($target === null) {
+                return;
+            }
+
+            $releaseDate = $target->releaseDate;
+
+            if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($releaseDate)) {
+                $this->blockedReason = $this->ageBlockReason($entry->name, $target->version, $releaseDate);
+
                 return;
             }
 
@@ -337,6 +397,14 @@ final class UpgradePrompt extends Prompt
             return;
         }
 
+        $releaseDate = $row->releaseDate;
+
+        if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($releaseDate)) {
+            $this->blockedReason = $this->ageBlockReason($this->pickerPackageName, $row->version, $releaseDate);
+
+            return;
+        }
+
         $this->selections[$this->pickerPackageName] = new VersionSelection($this->pickerBumpType, $row);
         $this->closePicker();
         $this->recomputeConflictMap();
@@ -372,6 +440,131 @@ final class UpgradePrompt extends Prompt
         );
 
         $this->submit();
+    }
+
+    /**
+     * Opens the age input, prefilled with the active threshold ('' when the gate is off).
+     */
+    private function openAgeInput(): void
+    {
+        $this->isAgeInputActive = true;
+        $this->ageInput         = $this->releaseAgePolicy->threshold()?->format() ?? '';
+        $this->ageInputError    = null;
+    }
+
+    private function handleAgeInputKey(string $key): void
+    {
+        match (true) {
+            $key === "\n" || $key === "\r"                        => $this->commitAgeInput(),
+            $key === Key::ESCAPE                                   => $this->closeAgeInput(),
+            in_array($key, [Key::BACKSPACE, Key::CTRL_H], true)    => $this->ageInputBackspace(),
+            $key === Key::CTRL_U                                   => $this->ageInputClear(),
+            $key === Key::CTRL_C                                   => $this->cancelPrompt(),
+            $this->isPrintable($key)                               => $this->ageInputAppend($key),
+            default                                                => false, // ignore unrecognised keys
+        };
+    }
+
+    /**
+     * Applies the typed threshold. An empty value disables the gate; an unparsable one
+     * keeps the input open and reports why.
+     */
+    private function commitAgeInput(): void
+    {
+        $value    = Str::trim($this->ageInput);
+        $duration = null;
+
+        if ($value !== '') {
+            try {
+                $duration = Duration::parse($value);
+            } catch (InvalidArgumentException $invalidArgumentException) {
+                $this->ageInputError = $invalidArgumentException->getMessage();
+
+                return;
+            }
+        }
+
+        $this->releaseAgePolicy = $this->releaseAgePolicy->withThreshold($duration);
+
+        if ($this->didPruneIneligibleSelections()) {
+            $this->recomputeConflictMap();
+        }
+
+        $this->closeAgeInput();
+    }
+
+    private function closeAgeInput(): void
+    {
+        $this->isAgeInputActive = false;
+        $this->ageInput         = '';
+        $this->ageInputError    = null;
+    }
+
+    private function ageInputAppend(string $key): void
+    {
+        if (Str::length($this->ageInput) >= self::AGE_INPUT_MAX_LENGTH) {
+            return;
+        }
+
+        $this->ageInput .= $key;
+        $this->ageInputError = null;
+    }
+
+    private function ageInputBackspace(): void
+    {
+        $this->ageInput      = Str::dropLast($this->ageInput);
+        $this->ageInputError = null;
+    }
+
+    private function ageInputClear(): void
+    {
+        $this->ageInput      = '';
+        $this->ageInputError = null;
+    }
+
+    /**
+     * Single printable ASCII character — everything the duration parser can consume.
+     */
+    private function isPrintable(string $key): bool
+    {
+        return Str::length($key) === 1 && $key >= ' ' && $key <= '~';
+    }
+
+    /**
+     * @return bool whether any selection was dropped
+     */
+    private function didPruneIneligibleSelections(): bool
+    {
+        $isPruned = false;
+
+        foreach ($this->selections as $name => $selection) {
+            if ($selection === null) {
+                continue;
+            }
+
+            if ($this->releaseAgePolicy->isEligible($selection->target->releaseDate)) {
+                continue;
+            }
+
+            $this->selections[$name] = null;
+            $isPruned                = true;
+        }
+
+        return $isPruned;
+    }
+
+    /**
+     * Only reachable for a known release date — a target without one is always eligible.
+     */
+    private function ageBlockReason(string $packageName, string $version, DateTimeImmutable $releaseDate): string
+    {
+        return sprintf(
+            '%s %s is too new (released %s) — minimum release age is %s',
+            $packageName,
+            $version,
+            RelativeTime::describe($releaseDate, $this->releaseAgePolicy->now()),
+            $this->releaseAgePolicy->label(),
+        );
     }
 
     private function recomputeConflictMap(): void

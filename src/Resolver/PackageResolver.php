@@ -128,7 +128,7 @@ final readonly class PackageResolver implements PackageResolverInterface
         if (Str::startsWith($version, 'dev-')) {
             $candidate = $versionSelector->findBestCandidate($package->getName(), $version, $bestStability);
             $target    = ($candidate !== false && $candidate->getVersion() !== $version)
-                ? VersionTarget::fromRaw($candidate->getPrettyVersion()) // @codeCoverageIgnore
+                ? VersionTarget::fromPackage($candidate) // @codeCoverageIgnore
                 : null;
 
             return [null, $target, null];
@@ -164,7 +164,7 @@ final readonly class PackageResolver implements PackageResolverInterface
             return null;
         }
 
-        return VersionTarget::fromRaw($candidate->getPrettyVersion());
+        return VersionTarget::fromPackage($candidate);
     }
 
     /**

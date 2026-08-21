@@ -205,3 +205,9 @@ function stripAnsiCodes(string $s): string
     \expect($text)->toContain('1.0.0')
         ->and($text)->toContain('(latest)');
 });
+
+\it('inputField renders the value followed by a cursor', function (): void {
+    $fmt = new AnsiFormatter();
+
+    \expect(\stripAnsiCodes($fmt->inputField('7d')))->toBe('7d▏');
+});

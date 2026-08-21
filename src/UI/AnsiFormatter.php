@@ -26,6 +26,9 @@ final readonly class AnsiFormatter
     private const string WHITE    = "\e[37m";
     private const string YELLOW   = "\e[33m";
 
+    /** Marks a release blocked by the minimum-release-age threshold. */
+    private const string BLOCKED_MARK = '⊘';
+
     private const array BUMP_COLORS = [
         'patch' => self::BLUE,
         'minor' => self::GREEN,
@@ -132,9 +135,26 @@ final readonly class AnsiFormatter
         return self::BUMP_COLORS[$bumpType->value] . $bumpType->value . ' ▾' . self::RESET;
     }
 
+    /**
+     * Editable text field: the typed value followed by a block cursor.
+     */
+    public function inputField(string $value): string
+    {
+        return self::BOLD . $value . self::RESET . self::DIM . '▏' . self::RESET;
+    }
+
     public function loading(): string
     {
         return self::CYAN . '⠋' . self::RESET . '  ' . self::DIM . 'loading…' . self::RESET;
+    }
+
+    /**
+     * Footer age note, e.g. "released 3 days ago" — dim when informational,
+     * yellow when the release is blocked by the age threshold.
+     */
+    public function ageNote(string $text, bool $isBlocked): string
+    {
+        return $isBlocked ? $this->warning($text) : $this->dim($text);
     }
 
     public function pickerVersion(string $version): string
@@ -148,10 +168,15 @@ final readonly class AnsiFormatter
         bool $isCompatible,
         string $version,
         BumpType $bumpType,
+        bool $isAgeBlocked = false,
     ): string {
         $color = self::BUMP_COLORS[$bumpType->value];
 
         return match (true) {
+            $isAgeBlocked && $isFocused
+                => self::BG_BLUE . self::WHITE . self::BLOCKED_MARK . ' ' . $version . self::RESET,
+            $isAgeBlocked
+                => $this->dim(self::BLOCKED_MARK . ' ' . $version),
             $isFocused && $isSelected && !$isCompatible
                 => self::BG_BLUE . self::WHITE . self::BOLD . '◉!' . $version . self::RESET,
             $isFocused && $isSelected
@@ -176,8 +201,13 @@ final readonly class AnsiFormatter
         bool $isCompatible,
         string $version,
         string $suffix,
+        bool $isAgeBlocked = false,
     ): string {
         return match (true) {
+            $isAgeBlocked && $isCursor
+                => self::BG_BLUE . self::WHITE . '▸ ' . self::BLOCKED_MARK . $version . self::RESET . $suffix,
+            $isAgeBlocked
+                => '  ' . $this->dim(self::BLOCKED_MARK . $version) . $suffix,
             $isCursor && !$isCompatible
                 => self::BG_BLUE . self::WHITE . '▸ !' . $version . self::RESET . ' ' . self::DIM . self::RESET . $suffix,
             $isCursor

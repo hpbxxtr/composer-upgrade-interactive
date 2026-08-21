@@ -1,6 +1,8 @@
 <?php
 
 declare(strict_types=1);
+use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
@@ -1204,4 +1206,219 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 
     \expect($output)->toContain('— selected: 2.0.0')
         ->and($output)->not->toContain('installed');
+});
+
+// ---------------------------------------------------------------------------
+// Minimum release age
+// ---------------------------------------------------------------------------
+
+function agedPrompt(string $releaseDate, ?string $threshold, string $now = '2026-08-20 12:00:00'): UpgradePrompt
+{
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.3',
+        minor: VersionTarget::fromRaw('1.3.0', new DateTimeImmutable($releaseDate)),
+    );
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        releaseAgePolicy: new ReleaseAgePolicy(
+            $threshold === null ? null : Duration::parse($threshold),
+            new DateTimeImmutable($now),
+        ),
+    );
+    $prompt->state = 'initial';
+
+    return $prompt;
+}
+
+\it('shows the current threshold in the help line', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-01 12:00:00', '7d')));
+
+    \expect($output)->toContain('a min age (7d)');
+});
+
+\it('shows "off" in the help line when no threshold is set', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-01 12:00:00', null)));
+
+    \expect($output)->toContain('a min age (off)');
+});
+
+\it('shows the release age of the hovered target', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-15 12:00:00', '7d')));
+
+    \expect($output)->toContain('released 5 days ago');
+});
+
+\it('marks the hovered target as blocked when it is too new', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-19 12:00:00', '7d')));
+
+    \expect($output)->toContain('blocked by min age 7d');
+});
+
+\it('does not mark an old enough target as blocked', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-06-19 12:00:00', '7d')));
+
+    \expect($output)->not->toContain('blocked by min age');
+});
+
+\it('marks a blocked version cell with the blocked glyph', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-19 12:00:00', '7d')));
+
+    \expect($output)->toContain('⊘ 1.3.0');
+});
+
+\it('reports an unknown release date while the gate is enabled', function (): void {
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0')],
+        releaseAgePolicy: new ReleaseAgePolicy(Duration::parse('7d'), new DateTimeImmutable('2026-08-20 12:00:00')),
+    );
+    $prompt->state = 'initial';
+
+    \expect(\stripAnsi(\renderPrompt($prompt)))->toContain('release date unknown');
+});
+
+\it('omits the age line when nothing is known and the gate is off', function (): void {
+    $prompt = new UpgradePrompt([\outdatedPackageWithMinor('vendor/pkg', '1.2.3', '1.3.0')]);
+    $prompt->state = 'initial';
+
+    \expect(\stripAnsi(\renderPrompt($prompt)))->not->toContain('release date unknown');
+});
+
+\it('renders the refusal notice', function (): void {
+    $upgradePrompt = \agedPrompt('2026-08-19 12:00:00', '7d');
+    $upgradePrompt->blockedReason = 'vendor/pkg 1.3.0 is too new';
+
+    \expect(\stripAnsi(\renderPrompt($upgradePrompt)))->toContain('! vendor/pkg 1.3.0 is too new');
+});
+
+// ---------------------------------------------------------------------------
+// Footer alignment and ordering
+// ---------------------------------------------------------------------------
+
+/**
+ * Column at which the value of a footer line starts, i.e. the offset of $needle
+ * in the first stripped line containing $label.
+ */
+function footerValueColumn(string $output, string $label, string $needle): int
+{
+    foreach (explode(PHP_EOL, \stripAnsi($output)) as $line) {
+        if (str_contains($line, $label) && str_contains($line, $needle)) {
+            return (int) strpos($line, $needle);
+        }
+    }
+
+    return -1;
+}
+
+\it('starts the age value in the same column as the compare value', function (): void {
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/pkg',
+        current: '1.2.3',
+        minor: VersionTarget::fromRaw('1.3.0', new DateTimeImmutable('2026-08-05 12:00:00')),
+        repoUrl: 'https://github.com/vendor/pkg',
+    );
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        releaseAgePolicy: new ReleaseAgePolicy(Duration::parse('7d'), new DateTimeImmutable('2026-08-20 12:00:00')),
+    );
+    $prompt->state = 'initial';
+
+    $output = \renderPrompt($prompt);
+
+    $compareColumn = \footerValueColumn($output, 'compare', 'https');
+    $ageColumn     = \footerValueColumn($output, 'age', 'released');
+
+    \expect($compareColumn)->toBeGreaterThan(0)
+        ->and($ageColumn)->toBe($compareColumn)
+    ;
+});
+
+\it('renders the abandonment notice below the age line', function (): void {
+    $outdatedPackage = \outdatedPackage(
+        name: 'vendor/dead',
+        current: '1.2.3',
+        minor: VersionTarget::fromRaw('1.3.0', new DateTimeImmutable('2021-05-03 12:00:00')),
+        abandonedBy: 'vendor/replacement',
+    );
+
+    $prompt = new UpgradePrompt(
+        [$outdatedPackage],
+        releaseAgePolicy: new ReleaseAgePolicy(Duration::parse('7d'), new DateTimeImmutable('2026-08-20 12:00:00')),
+    );
+    $prompt->state = 'initial';
+
+    $output = \stripAnsi(\renderPrompt($prompt));
+
+    \expect(strpos($output, 'released 5 years ago'))->toBeLessThan((int) strpos($output, '⚠ abandoned'));
+});
+
+// ---------------------------------------------------------------------------
+// Age input field
+// ---------------------------------------------------------------------------
+
+function ageInputPrompt(string $value, ?string $error = null): UpgradePrompt
+{
+    $prompt = new UpgradePrompt(
+        [\outdatedPackage(
+            name: 'vendor/pkg',
+            current: '1.2.3',
+            minor: VersionTarget::fromRaw('1.3.0', new DateTimeImmutable('2026-08-05 12:00:00')),
+        )],
+        releaseAgePolicy: new ReleaseAgePolicy(Duration::parse('7d'), new DateTimeImmutable('2026-08-20 12:00:00')),
+    );
+
+    $prompt->state             = 'initial';
+    $prompt->isAgeInputActive  = true;
+    $prompt->ageInput          = $value;
+    $prompt->ageInputError     = $error;
+
+    return $prompt;
+}
+
+\it('renders the typed value in the age input field', function (): void {
+    $output = \stripAnsi(\renderPrompt(\ageInputPrompt('2w')));
+
+    \expect($output)->toContain('min age')
+        ->and($output)->toContain('2w')
+    ;
+});
+
+\it('aligns the age input field with the other footer values', function (): void {
+    $output = \renderPrompt(\ageInputPrompt('2w'));
+
+    \expect(\footerValueColumn($output, 'min age', '2w'))
+        ->toBe(\footerValueColumn($output, 'compare', 'https'));
+});
+
+\it('shows the input hint while the field is valid', function (): void {
+    $output = \stripAnsi(\renderPrompt(\ageInputPrompt('2w')));
+
+    \expect($output)->toContain('enter apply')
+        ->and($output)->toContain('esc cancel')
+        ->and($output)->toContain('empty = off')
+    ;
+});
+
+\it('shows the parser error instead of the hint', function (): void {
+    $output = \stripAnsi(\renderPrompt(\ageInputPrompt('soon', 'Invalid duration "soon".')));
+
+    \expect($output)->toContain('! Invalid duration "soon".');
+});
+
+\it('replaces the navigation help with the input hint while the field is open', function (): void {
+    $output = \stripAnsi(\renderPrompt(\ageInputPrompt('2w')));
+
+    \expect($output)->not->toContain('v versions')
+        ->and($output)->not->toContain('a min age (7d)')
+    ;
+});
+
+\it('omits the age input field while the field is closed', function (): void {
+    $upgradePrompt = \ageInputPrompt('2w');
+    $upgradePrompt->isAgeInputActive = false;
+
+    // The help line still mentions "a min age (7d)", so assert on the field's cursor instead.
+    \expect(\stripAnsi(\renderPrompt($upgradePrompt)))->not->toContain('▏');
 });

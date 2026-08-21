@@ -310,3 +310,40 @@ function makeInteractiveCommandTester(
 
     \expect($tester->getStatusCode())->toBe(0);
 });
+
+// ---------------------------------------------------------------------------
+// --min-age option
+// ---------------------------------------------------------------------------
+
+\it('exits 1 with an error when --min-age cannot be parsed', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldNotReceive('resolve');
+
+    [$tester, $io] = \makeCommandTester($mock);
+    $exitCode      = $tester->execute(['--min-age' => 'whenever']);
+
+    \expect($exitCode)->toBe(1)
+        ->and($io->getOutput())->toContain('Invalid duration "whenever"')
+    ;
+});
+
+\it('accepts a valid --min-age value', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([]);
+
+    [$tester, $io] = \makeCommandTester($mock);
+    $exitCode      = $tester->execute(['--min-age' => '2w']);
+
+    \expect($exitCode)->toBe(0)
+        ->and($io->getOutput())->toContain('up to date')
+    ;
+});
+
+\it('accepts a bare number of days for --min-age', function (): void {
+    $mock = \Mockery::mock(PackageResolverInterface::class);
+    $mock->shouldReceive('resolve')->once()->andReturn([]);
+
+    [$tester] = \makeCommandTester($mock);
+
+    \expect($tester->execute(['--min-age' => '10']))->toBe(0);
+});

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Hpbxxtr\UpgradeInteractive\UI;
 
+use DateTimeImmutable;
+use Hpbxxtr\UpgradeInteractive\Core\RelativeTime;
 use Hpbxxtr\UpgradeInteractive\Core\Str;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
@@ -29,6 +31,11 @@ use function sprintf;
 final class UpgradePromptRenderer extends Renderer
 {
     private const int CONFLICT_FOOTER_MAX = 5;
+
+    /** Footer label column width — the longest label ("compare"/"release"/"min age"). */
+    private const int FOOTER_LABEL_WIDTH = 7;
+
+    private const string AGE_INPUT_HINT = 'type a duration (7d · 2w · 3m · 1y) · enter apply · esc cancel · ctrl+u clear · empty = off';
 
     private readonly AnsiFormatter $ansiFormatter;
 
@@ -105,16 +112,37 @@ final class UpgradePromptRenderer extends Renderer
             }
         }
 
-        // Footer: compare/release URLs, abandonment notice, conflict lines
+        // Footer: compare/release URLs, release age, abandonment notice, conflict lines
         $footerBump   = $upgradePrompt->isPickerActive ? $upgradePrompt->pickerBumpType : $focusedBump;
         $footerTarget = $this->resolveFooterTarget($upgradePrompt, $activeEntry, $focusedBump);
-        $footerLines  = $this->buildFooterLines($activeEntry, $footerBump, $footerTarget, $indent);
+        $footerLines  = $this->buildAgeInputLines($upgradePrompt, $indent);
 
-        $hoveredVersionRaw = $footerTarget instanceof VersionTarget ? $footerTarget->versionRaw : '';
+        foreach ($this->buildUrlLines($activeEntry, $footerBump, $footerTarget, $indent) as $urlLine) {
+            $footerLines[] = $urlLine;
+        }
 
-        if ($hoveredVersionRaw === '' && !$upgradePrompt->isPickerActive && $focusedBump !== null) {
-            $hoveredTarget     = $activeEntry->target($focusedBump);
-            $hoveredVersionRaw = $hoveredTarget instanceof VersionTarget ? $hoveredTarget->versionRaw : '';
+        $hoveredTarget = $footerTarget;
+
+        if (!$hoveredTarget instanceof VersionTarget && !$upgradePrompt->isPickerActive && $focusedBump !== null) {
+            $hoveredTarget = $activeEntry->target($focusedBump);
+        }
+
+        $hoveredVersionRaw = $hoveredTarget instanceof VersionTarget ? $hoveredTarget->versionRaw : '';
+
+        $ageLine = $this->buildAgeLine($upgradePrompt, $hoveredTarget, $indent);
+
+        if ($ageLine !== null) {
+            $footerLines[] = $ageLine;
+        }
+
+        $abandonedLine = $this->buildAbandonedLine($activeEntry, $indent);
+
+        if ($abandonedLine !== null) {
+            $footerLines[] = $abandonedLine;
+        }
+
+        if ($upgradePrompt->blockedReason !== null) {
+            $footerLines[] = $indent . $this->ansiFormatter->warning('! ' . $upgradePrompt->blockedReason);
         }
 
         foreach ($this->collectConflictLines($upgradePrompt, $activeEntry, $hoveredVersionRaw, $indent) as $conflictLine) {
@@ -131,11 +159,7 @@ final class UpgradePromptRenderer extends Renderer
 
         // Help
         $this->line('');
-        $this->line($indent . $this->ansiFormatter->dim(
-            $upgradePrompt->isPickerActive
-                ? '↑↓ navigate · ←→ column · space select · esc close'
-                : '↑↓ navigate · ←→ column · space select · v versions · enter confirm',
-        ));
+        $this->line($indent . $this->ansiFormatter->dim($this->helpText($upgradePrompt)));
 
         return (string) $this;
     }
@@ -188,16 +212,14 @@ final class UpgradePromptRenderer extends Renderer
 
                 $isFocused  = $bumpType === $focusedBump;
                 $isSelected = $bumpType === $selectedK?->column;
-                $ver        = $selectedK !== null && $selectedK->column === $bumpType
-                    ? $selectedK->target->version
-                    : $target->version;
-                $versionRaw = $selectedK !== null && $selectedK->column === $bumpType
-                    ? $selectedK->target->versionRaw
-                    : $target->versionRaw;
-                $isCompatible = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $versionRaw);
+                $displayed  = $selectedK !== null && $selectedK->column === $bumpType
+                    ? $selectedK->target
+                    : $target;
+                $isCompatible  = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $displayed->versionRaw);
+                $isAgeBlocked  = !$upgradePrompt->releaseAgePolicy->isEligible($displayed->releaseDate);
 
                 return $this->ansiFormatter->visPad(
-                    $this->ansiFormatter->versionCell($isFocused, $isSelected, $isCompatible, $ver, $bumpType),
+                    $this->ansiFormatter->versionCell($isFocused, $isSelected, $isCompatible, $displayed->version, $bumpType, $isAgeBlocked),
                     $colW + 2,
                 );
             },
@@ -272,9 +294,10 @@ final class UpgradePromptRenderer extends Renderer
                 $isCursor     = $cIdx === $upgradePrompt->pickerCol && $rowIdx === $upgradePrompt->pickerRow;
                 $suffix       = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
                 $isCompatible = $upgradePrompt->pickerVersionCompatibility[$version->versionRaw] ?? true;
+                $isAgeBlocked = !$upgradePrompt->releaseAgePolicy->isEligible($version->releaseDate);
 
                 $cells[] = $this->ansiFormatter->visPad(
-                    $this->ansiFormatter->pickerRow($isCursor, $isCompatible, $version->version, $suffix),
+                    $this->ansiFormatter->pickerRow($isCursor, $isCompatible, $version->version, $suffix, $isAgeBlocked),
                     $colWidth,
                 );
             }
@@ -283,6 +306,37 @@ final class UpgradePromptRenderer extends Renderer
         }
 
         return $lines;
+    }
+
+    /**
+     * Footer note about the hovered target's release date, e.g.
+     * "age      released 3 days ago · blocked by min age 7d".
+     */
+    private function buildAgeLine(UpgradePrompt $upgradePrompt, ?VersionTarget $versionTarget, string $indent): ?string
+    {
+        if (!$versionTarget instanceof VersionTarget) {
+            return null;
+        }
+
+        $policy      = $upgradePrompt->releaseAgePolicy;
+        $releaseDate = $versionTarget->releaseDate;
+
+        if (!$releaseDate instanceof DateTimeImmutable && !$policy->isEnabled()) {
+            return null;
+        }
+
+        $isBlocked = !$policy->isEligible($releaseDate);
+        $text      = $releaseDate instanceof DateTimeImmutable
+            ? 'released ' . RelativeTime::describe($releaseDate, $policy->now())
+            : 'release date unknown';
+
+        if ($isBlocked) {
+            $text .= ' · blocked by min age ' . $policy->label();
+        }
+
+        return $indent . $this->ansiFormatter->visPad('', 5)
+            . $indent . $this->footerLabel('age')
+            . $indent . $this->ansiFormatter->ageNote($text, $isBlocked);
     }
 
     private function sectionLabel(string $label, int $totalWidth): string
@@ -359,11 +413,11 @@ final class UpgradePromptRenderer extends Renderer
     }
 
     /**
-     * Builds the URL lines (compare/release) and abandonment notice for the footer.
+     * Builds the compare/release URL lines for the footer.
      *
      * @return list<string>
      */
-    private function buildFooterLines(
+    private function buildUrlLines(
         OutdatedPackage $outdatedPackage,
         ?BumpType $bumpType,
         ?VersionTarget $versionTarget,
@@ -376,25 +430,82 @@ final class UpgradePromptRenderer extends Renderer
 
             if ($urls->compareUrl !== null) {
                 $lines[] = $indent . $this->ansiFormatter->bumpColor($bumpType, $this->ansiFormatter->visPad($bumpType->value, 5))
-                    . $indent . $this->ansiFormatter->footerLabel('compare')
+                    . $indent . $this->footerLabel('compare')
                     . $indent . $this->ansiFormatter->footerLink($urls->compareUrl);
             }
 
             if ($urls->releaseUrl !== null) {
                 $lines[] = $indent . $this->ansiFormatter->bumpColor($bumpType, $this->ansiFormatter->visPad('', 5))
-                    . $indent . $this->ansiFormatter->footerLabel('release')
+                    . $indent . $this->footerLabel('release')
                     . $indent . $this->ansiFormatter->footerLink($urls->releaseUrl);
             }
         }
 
-        if ($outdatedPackage->abandonedBy !== null) {
-            $notice  = $outdatedPackage->abandonedBy !== ''
-                ? '⚠ abandoned · use ' . $outdatedPackage->abandonedBy . ' instead'
-                : '⚠ abandoned';
-            $lines[] = $indent . $this->ansiFormatter->warning($notice);
+        return $lines;
+    }
+
+    private function helpText(UpgradePrompt $upgradePrompt): string
+    {
+        if ($upgradePrompt->isAgeInputActive) {
+            return self::AGE_INPUT_HINT;
+        }
+
+        return ($upgradePrompt->isPickerActive
+            ? '↑↓ navigate · ←→ column · space select · esc close'
+            : '↑↓ navigate · ←→ column · space select · v versions · enter confirm')
+            . ' · a min age (' . $upgradePrompt->releaseAgePolicy->label() . ')';
+    }
+
+    /**
+     * The age input field, plus its parser error when the typed value is invalid;
+     * empty while the field is closed.
+     *
+     * @return list<string>
+     */
+    private function buildAgeInputLines(UpgradePrompt $upgradePrompt, string $indent): array
+    {
+        if (!$upgradePrompt->isAgeInputActive) {
+            return [];
+        }
+
+        $lines = [
+            $indent . $this->ansiFormatter->visPad('', 5)
+                . $indent . $this->footerLabel('min age')
+                . $indent . $this->ansiFormatter->inputField($upgradePrompt->ageInput),
+        ];
+
+        // The hint lives on the help line; only the parser error needs to sit next to the field.
+        if ($upgradePrompt->ageInputError !== null) {
+            $lines[] = $indent . $this->ansiFormatter->visPad('', 5) . $indent
+                . $this->ansiFormatter->visPad('', self::FOOTER_LABEL_WIDTH) . $indent
+                . $this->ansiFormatter->warning('! ' . $upgradePrompt->ageInputError);
         }
 
         return $lines;
+    }
+
+    /**
+     * Abandonment notice, rendered below the age line; null when the package is not abandoned.
+     */
+    private function buildAbandonedLine(OutdatedPackage $outdatedPackage, string $indent): ?string
+    {
+        if ($outdatedPackage->abandonedBy === null) {
+            return null;
+        }
+
+        $notice = $outdatedPackage->abandonedBy !== ''
+            ? '⚠ abandoned · use ' . $outdatedPackage->abandonedBy . ' instead'
+            : '⚠ abandoned';
+
+        return $indent . $this->ansiFormatter->warning($notice);
+    }
+
+    /**
+     * Footer label padded to a fixed width so every footer value starts in the same column.
+     */
+    private function footerLabel(string $label): string
+    {
+        return $this->ansiFormatter->visPad($this->ansiFormatter->footerLabel($label), self::FOOTER_LABEL_WIDTH);
     }
 
     /**
