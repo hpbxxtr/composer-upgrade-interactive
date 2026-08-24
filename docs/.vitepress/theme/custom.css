@@ -1,0 +1,57 @@
+/*
+ * Neon palette, matching the README badge colours:
+ *   magenta #ff00ff · cyan #40e5ff · lime #ccff00 · near-black #0d0d1a
+ *
+ * Pure #ff00ff on white sits at roughly 3:1 contrast, so light mode uses a
+ * darkened magenta for anything that renders as text and keeps the neon tone
+ * for solid fills only. Dark mode gets the full neon set.
+ */
+
+:root {
+    --vp-c-brand-1: #a4009f;
+    --vp-c-brand-2: #8a0086;
+    --vp-c-brand-3: #c400bf;
+    --vp-c-brand-soft: rgba(255, 0, 255, 0.12);
+
+    --vp-c-tip-1: var(--vp-c-brand-1);
+    --vp-c-tip-2: var(--vp-c-brand-2);
+    --vp-c-tip-3: var(--vp-c-brand-3);
+    --vp-c-tip-soft: var(--vp-c-brand-soft);
+
+    --vp-button-brand-bg: var(--vp-c-brand-3);
+    --vp-button-brand-hover-bg: var(--vp-c-brand-2);
+    --vp-button-brand-active-bg: var(--vp-c-brand-1);
+
+    --vp-home-hero-name-color: transparent;
+    --vp-home-hero-name-background: linear-gradient(120deg, #0086a8 30%, #a4009f);
+    --vp-home-hero-image-background-image: linear-gradient(-45deg, rgba(255, 0, 255, 0.25), rgba(64, 229, 255, 0.25));
+    --vp-home-hero-image-filter: blur(44px);
+}
+
+.dark {
+    --vp-c-bg: #0d0d1a;
+    --vp-c-bg-alt: #08080f;
+    --vp-c-bg-soft: #16162a;
+    --vp-c-bg-elv: #16162a;
+
+    --vp-c-brand-1: #ff4dff;
+    --vp-c-brand-2: #ff00ff;
+    --vp-c-brand-3: #bf00ff;
+    --vp-c-brand-soft: rgba(255, 0, 255, 0.18);
+
+    --vp-c-divider: #24243c;
+    --vp-c-gutter: #08080f;
+
+    --vp-home-hero-name-background: linear-gradient(120deg, #40e5ff 30%, #ff00ff);
+    --vp-home-hero-image-background-image: linear-gradient(-45deg, rgba(255, 0, 255, 0.35), rgba(64, 229, 255, 0.35));
+}
+
+/* Lime is the third README accent — used for inline code so it stays distinct
+   from the magenta link colour instead of competing with it. */
+.dark :not(pre) > code {
+    color: #ccff00;
+}
+
+.vp-doc :not(pre) > code {
+    font-variant-ligatures: none;
+}

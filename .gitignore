@@ -7,3 +7,6 @@
 /conf/rector.php
 /node_modules/
 /vendor/
+/docs/node_modules/
+/docs/.vitepress/dist/
+/docs/.vitepress/cache/

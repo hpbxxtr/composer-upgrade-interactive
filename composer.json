@@ -13,7 +13,8 @@
   "homepage": "https://github.com/hpbxxtr/composer-upgrade-interactive",
   "support": {
     "issues": "https://github.com/hpbxxtr/composer-upgrade-interactive/issues",
-    "source": "https://github.com/hpbxxtr/composer-upgrade-interactive"
+    "source": "https://github.com/hpbxxtr/composer-upgrade-interactive",
+    "docs": "https://hpbxxtr.github.io/composer-upgrade-interactive/"
   },
   "minimum-stability": "stable",
   "prefer-stable": true,

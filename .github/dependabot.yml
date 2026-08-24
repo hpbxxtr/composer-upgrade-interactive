@@ -19,3 +19,13 @@ updates:
       actions-all:
         patterns:
           - '*'
+
+  - package-ecosystem: npm
+    directory: /docs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    groups:
+      npm-all:
+        patterns:
+          - '*'
