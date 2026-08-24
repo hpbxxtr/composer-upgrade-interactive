@@ -50,13 +50,11 @@ final class UpgradeInteractiveCommand extends BaseCommand
             ->setDescription('Interactively select and upgrade outdated dependencies')
             ->addOption(
                 name: 'caret',
-                shortcut: null,
                 mode: InputOption::VALUE_NONE,
                 description: 'Use caret (^) version range instead of exact version (e.g. ^1.2.3 instead of 1.2.3)',
             )
             ->addOption(
                 name: 'min-age',
-                shortcut: null,
                 mode: InputOption::VALUE_REQUIRED,
                 description: 'Minimum release age before a version may be selected, e.g. 7d, 2w, 3m, 1y or a number of days',
             )

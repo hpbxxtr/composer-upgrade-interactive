@@ -90,7 +90,7 @@ final readonly class PackageResolver implements PackageResolverInterface
                 $bestStability,
             );
 
-            if ($patchTarget === null && $minorTarget === null && $majorTarget === null) {
+            if (!$patchTarget instanceof VersionTarget && !$minorTarget instanceof VersionTarget && !$majorTarget instanceof VersionTarget) {
                 continue;
             }
 

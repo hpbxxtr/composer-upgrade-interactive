@@ -22,7 +22,7 @@ final readonly class RelativeTime
     public static function describe(DateTimeImmutable $date, DateTimeImmutable $now): string
     {
         $diff = $now->diff($date);
-        $days = (int) $diff->days;
+        $days = $diff->days ?: 0;
 
         if ($diff->invert === 0) {
             return 'today';
