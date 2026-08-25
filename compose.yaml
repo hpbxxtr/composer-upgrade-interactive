@@ -1,0 +1,19 @@
+services:
+  php:
+    image: "wodby/php:${DEV_PHP_VERSION}"
+    environment:
+      PHP_EXTENSIONS_DISABLE: 'xhprof,spx'
+      # The container user does not own the bind-mounted host files, so git refuses to read
+      # the repository and every composer call prints a "dubious ownership" hint and fails to
+      # detect the root package version. Set safe.directory via env so no file has to be written.
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: 'safe.directory'
+      GIT_CONFIG_VALUE_0: '/var/www/html'
+    healthcheck:
+      test: ["CMD", "php", "-v"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - .:/var/www/html
+      - ${DOCKER_COMPOSER_CACHE}:/home/wodby/.composer/cache

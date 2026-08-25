@@ -1,0 +1,22 @@
+services:
+  compatibility-test:
+    container_name: test-php-${PHP_VERSION}
+    image: "wodby/php:${PHP_VERSION}"
+    environment:
+      PHP_EXTENSIONS_DISABLE: 'xhprof,spx'
+      PROMPT_FALLBACK: '1'
+    healthcheck:
+      test: [ "CMD", "php", "-v" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - .:/var/www/html:ro
+      - ${DOCKER_COMPOSER_CACHE}:/home/wodby/.composer/cache
+    entrypoint: sh -c "
+      echo 'Prepare project...' &&
+      mkdir -p /home/wodby/test &&
+      cd /var/www/html &&
+      tar -cf - --exclude=./vendor --exclude=./.cache --exclude=./.git --exclude=./docs --exclude=./coverage --exclude=./node_modules . | (cd /home/wodby/test && tar -xf -) &&
+      cd /home/wodby/test &&
+      ./tests/bin/run-compatibility-test.sh"

@@ -34,7 +34,7 @@ phpstan-group-by-rule: #~~ runs phpstan and groups errors by rule identifier (so
 		| sort -rn
 
 composer-audit: #~~ runs composer audit
-	composer audit
+	${PHP_COMPOSER} audit
 
 define print_section
 	@printf "\n\n"
