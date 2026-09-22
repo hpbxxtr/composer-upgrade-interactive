@@ -24,7 +24,7 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Dependency review
         uses: actions/dependency-review-action@v5
@@ -38,7 +38,7 @@ jobs:
       image: semgrep/semgrep
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Scan
         run: semgrep scan --sarif --output semgrep.sarif --config "p/php" --config "p/owasp-top-ten"
