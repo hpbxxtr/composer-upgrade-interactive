@@ -12,7 +12,8 @@ export default defineConfig({
     lastUpdated: true,
 
     head: [
-        ['link', { rel: 'icon', type: 'image/svg+xml', href: '/composer-upgrade-interactive/favicon.svg' }],
+        ['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: '/composer-upgrade-interactive/favicon-32.png' }],
+        ['link', { rel: 'apple-touch-icon', sizes: '180x180', href: '/composer-upgrade-interactive/apple-touch-icon.png' }],
         ['meta', { name: 'theme-color', content: '#ff00ff' }],
     ],
 
@@ -21,6 +22,8 @@ export default defineConfig({
     },
 
     themeConfig: {
+        logo: '/composer_hui_logo_nav.png',
+
         nav: [
             { text: 'Guide', link: '/guide/installation', activeMatch: '/guide/' },
             { text: 'Reference', link: '/reference/cli', activeMatch: '/reference/' },

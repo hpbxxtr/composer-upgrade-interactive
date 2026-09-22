@@ -5,6 +5,9 @@ hero:
   name: composer upgrade-interactive
   text: Pick your upgrades, one package at a time
   tagline: An interactive TUI for selectively upgrading Composer dependencies — yarn upgrade-interactive for PHP.
+  image:
+    src: /composer_hui_logo_hero.webp
+    alt: composer h:ui
   actions:
     - theme: brand
       text: Get started
