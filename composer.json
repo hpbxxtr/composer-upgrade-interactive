@@ -26,8 +26,8 @@
   "require-dev": {
     "brnshkr/config": "dev-php83",
     "composer/composer": "2.10.3",
-    "friendsofphp/php-cs-fixer": "3.95.24",
-    "kubawerlos/php-cs-fixer-custom-fixers": "3.37.3",
+    "friendsofphp/php-cs-fixer": "3.95.26",
+    "kubawerlos/php-cs-fixer-custom-fixers": "3.37.4",
     "mockery/mockery": "1.6.15",
     "pestphp/pest": "4.7.8",
     "pestphp/pest-plugin-arch": "4.0.2",
