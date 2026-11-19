@@ -67,3 +67,7 @@ Invalid duration "2 fortnights". Expected a number of days (e.g. "14") or a valu
 
 An empty `--min-age=` falls through to the `extra` value rather than disabling the gate; pass
 `--min-age=0` to switch it off for a single run.
+
+Composer's [`config.policy.cooldown`](/guide/minimum-release-age#composer-s-cooldown-policy) is not
+part of this order. It is a floor that applies on top of the result: versions inside the cooldown stay
+blocked even when the minimum release age is lower or off.

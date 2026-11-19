@@ -29,7 +29,7 @@
 - **Patch / minor / major** columns per package — choose exactly how far to upgrade each one
 - **Full version picker** — press `v` on any cell to browse all available stable versions in an inline multi-column list and pin an exact release
 - **Live compatibility checking** — conflicting versions are marked with `!` as you navigate; the footer explains which dependency chain is broken and whether it originates from the current upgrade selection or from an already-installed package
-- **Minimum release age** — gate out releases published minutes ago, project-wide or per run
+- **Minimum release age** — gate out releases published minutes ago, project-wide or per run; respects Composer's `policy.cooldown`
 - **require and require-dev** sections rendered separately
 - **Abandoned package warnings** with replacement suggestions
 - **Comparison and release URLs** in the footer for whichever bump type or version is focused (GitHub, GitLab, Packagist)
