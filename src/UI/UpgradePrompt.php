@@ -7,6 +7,7 @@ namespace Hpbxxtr\UpgradeInteractive\UI;
 use Hpbxxtr\UpgradeInteractive\Core\Duration;
 use Hpbxxtr\UpgradeInteractive\Core\RelativeTime;
 use Hpbxxtr\UpgradeInteractive\Core\Str;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\AgeGate;
 use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
@@ -249,8 +250,10 @@ final class UpgradePrompt extends Prompt
 
             $releaseDate = $target->releaseDate;
 
-            if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($target)) {
-                $this->blockedReason = $this->ageBlockReason($entry->name, $target->version, $releaseDate);
+            $gate = $this->releaseAgePolicy->blockingGate($target);
+
+            if ($releaseDate instanceof DateTimeImmutable && $gate instanceof AgeGate) {
+                $this->blockedReason = $this->ageBlockReason($entry->name, $target->version, $releaseDate, $gate);
 
                 return;
             }
@@ -399,8 +402,10 @@ final class UpgradePrompt extends Prompt
 
         $releaseDate = $row->releaseDate;
 
-        if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($row)) {
-            $this->blockedReason = $this->ageBlockReason($this->pickerPackageName, $row->version, $releaseDate);
+        $gate = $this->releaseAgePolicy->blockingGate($row);
+
+        if ($releaseDate instanceof DateTimeImmutable && $gate instanceof AgeGate) {
+            $this->blockedReason = $this->ageBlockReason($this->pickerPackageName, $row->version, $releaseDate, $gate);
 
             return;
         }
@@ -556,14 +561,17 @@ final class UpgradePrompt extends Prompt
     /**
      * Only reachable for a known release date — a target without one is always eligible.
      */
-    private function ageBlockReason(string $packageName, string $version, DateTimeImmutable $releaseDate): string
+    private function ageBlockReason(string $packageName, string $version, DateTimeImmutable $releaseDate, AgeGate $ageGate): string
     {
         return sprintf(
-            '%s %s is too new (released %s) — minimum release age is %s',
+            '%s %s is too new (released %s) — %s',
             $packageName,
             $version,
             RelativeTime::describe($releaseDate, $this->releaseAgePolicy->now()),
-            $this->releaseAgePolicy->label(),
+            match ($ageGate) {
+                AgeGate::MinAge   => 'minimum release age is ' . $this->releaseAgePolicy->label(),
+                AgeGate::Cooldown => 'composer cooldown is ' . $this->releaseAgePolicy->cooldownLabel(),
+            },
         );
     }
 

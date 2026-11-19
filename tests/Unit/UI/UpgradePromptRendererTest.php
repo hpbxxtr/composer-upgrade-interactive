@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictMap;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
@@ -1212,7 +1213,7 @@ function renderPrompt(UpgradePrompt $upgradePrompt): string
 // Minimum release age
 // ---------------------------------------------------------------------------
 
-function agedPrompt(string $releaseDate, ?string $threshold, string $now = '2026-08-20 12:00:00'): UpgradePrompt
+function agedPrompt(string $releaseDate, ?string $threshold, string $now = '2026-08-20 12:00:00', ?int $cooldownSeconds = null): UpgradePrompt
 {
     $outdatedPackage = \outdatedPackage(
         name: 'vendor/pkg',
@@ -1225,12 +1226,35 @@ function agedPrompt(string $releaseDate, ?string $threshold, string $now = '2026
         releaseAgePolicy: new ReleaseAgePolicy(
             $threshold === null ? null : Duration::parse($threshold),
             new DateTimeImmutable($now),
+            CooldownPolicy::fromComposerConfig(\cooldownConfig($cooldownSeconds)),
         ),
     );
     $prompt->state = 'initial';
 
     return $prompt;
 }
+
+\it('marks the hovered target as blocked by the composer cooldown', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-19 12:00:00', null, cooldownSeconds: 604800)));
+
+    \expect($output)->toContain('blocked by composer cooldown 7d')
+        ->and($output)->not->toContain('blocked by min age')
+    ;
+});
+
+\it('names min age when it is the longer gate', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-19 12:00:00', '2w', cooldownSeconds: 604800)));
+
+    \expect($output)->toContain('blocked by min age 2w')
+        ->and($output)->not->toContain('blocked by composer cooldown')
+    ;
+});
+
+\it('shows the cooldown in the help line', function (): void {
+    $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-01 12:00:00', '7d', cooldownSeconds: 129600)));
+
+    \expect($output)->toContain('a min age (7d · cooldown 1d 12h)');
+});
 
 \it('shows the current threshold in the help line', function (): void {
     $output = \stripAnsi(\renderPrompt(\agedPrompt('2026-08-01 12:00:00', '7d')));

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolverInterface;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
@@ -1039,11 +1040,12 @@ afterEach(function (): void {
 // Minimum release age
 // ---------------------------------------------------------------------------
 
-function agePolicy(?string $threshold, string $now = '2026-08-20 12:00:00'): ReleaseAgePolicy
+function agePolicy(?string $threshold, string $now = '2026-08-20 12:00:00', ?int $cooldownSeconds = null): ReleaseAgePolicy
 {
     return new ReleaseAgePolicy(
         $threshold === null ? null : Duration::parse($threshold),
         new DateTimeImmutable($now),
+        CooldownPolicy::fromComposerConfig(\cooldownConfig($cooldownSeconds)),
     );
 }
 
@@ -1345,5 +1347,51 @@ function outdatedPackageReleasedAt(string $date, string $name = 'vendor/pkg'): O
     \expect($prompt->releaseAgePolicy->label())->toBe('7d')
         ->and($prompt->isPickerActive)->toBeTrue()
         ->and($prompt->value())->toBe([])
+    ;
+});
+
+// ---------------------------------------------------------------------------
+// Composer cooldown
+// ---------------------------------------------------------------------------
+
+\it('explains a refusal caused by the composer cooldown', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy(null, cooldownSeconds: 604800),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([])
+        ->and($prompt->blockedReason)->toContain('vendor/pkg 1.3.0 is too new')
+        ->and($prompt->blockedReason)->toContain('composer cooldown is 7d')
+    ;
+});
+
+\it('explains a refusal caused by min age with the min age wording', function (): void {
+    Prompt::fake([Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy('2w', cooldownSeconds: 604800),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->blockedReason)->toContain('minimum release age is 2w');
+});
+
+\it('keeps cooldown versions blocked after min age is switched off', function (): void {
+    Prompt::fake(['a', Key::CTRL_U, "\n", Key::SPACE, "\n"]);
+
+    $prompt = new UpgradePrompt(
+        [\outdatedPackageReleasedAt('2026-08-19 12:00:00')],
+        releaseAgePolicy: \agePolicy('2w', cooldownSeconds: 604800),
+    );
+    $prompt->prompt();
+
+    \expect($prompt->value())->toBe([])
+        ->and($prompt->releaseAgePolicy->label())->toBe('off')
+        ->and($prompt->blockedReason)->toContain('composer cooldown is 7d')
     ;
 });

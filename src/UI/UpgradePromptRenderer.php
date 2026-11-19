@@ -7,6 +7,8 @@ namespace Hpbxxtr\UpgradeInteractive\UI;
 use DateTimeImmutable;
 use Hpbxxtr\UpgradeInteractive\Core\RelativeTime;
 use Hpbxxtr\UpgradeInteractive\Core\Str;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\AgeGate;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\ConflictReason;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
@@ -325,14 +327,17 @@ final class UpgradePromptRenderer extends Renderer
             return null;
         }
 
-        $isBlocked = !$policy->isEligible($versionTarget);
+        $gate      = $policy->blockingGate($versionTarget);
+        $isBlocked = $gate instanceof AgeGate;
         $text      = $releaseDate instanceof DateTimeImmutable
             ? 'released ' . RelativeTime::describe($releaseDate, $policy->now())
             : 'release date unknown';
 
-        if ($isBlocked) {
-            $text .= ' · blocked by min age ' . $policy->label();
-        }
+        $text .= match ($gate) {
+            AgeGate::MinAge   => ' · blocked by min age ' . $policy->label(),
+            AgeGate::Cooldown => ' · blocked by composer cooldown ' . $policy->cooldownLabel(),
+            null              => '',
+        };
 
         return $indent . $this->ansiFormatter->visPad('', 5)
             . $indent . $this->footerLabel('age')
@@ -453,7 +458,17 @@ final class UpgradePromptRenderer extends Renderer
         return ($upgradePrompt->isPickerActive
             ? '↑↓ navigate · ←→ column · space select · esc close'
             : '↑↓ navigate · ←→ column · space select · v versions · enter confirm')
-            . ' · a min age (' . $upgradePrompt->releaseAgePolicy->label() . ')';
+            . ' · a min age (' . $this->ageGateSummary($upgradePrompt->releaseAgePolicy) . ')';
+    }
+
+    /**
+     * "7d", or "7d · cooldown 1d 12h" when Composer's cooldown applies as well.
+     */
+    private function ageGateSummary(ReleaseAgePolicy $releaseAgePolicy): string
+    {
+        $cooldownLabel = $releaseAgePolicy->cooldownLabel();
+
+        return $releaseAgePolicy->label() . ($cooldownLabel !== null ? ' · cooldown ' . $cooldownLabel : '');
     }
 
     /**
