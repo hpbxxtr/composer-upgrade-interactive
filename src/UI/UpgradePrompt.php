@@ -249,7 +249,7 @@ final class UpgradePrompt extends Prompt
 
             $releaseDate = $target->releaseDate;
 
-            if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($releaseDate)) {
+            if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($target)) {
                 $this->blockedReason = $this->ageBlockReason($entry->name, $target->version, $releaseDate);
 
                 return;
@@ -399,7 +399,7 @@ final class UpgradePrompt extends Prompt
 
         $releaseDate = $row->releaseDate;
 
-        if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($releaseDate)) {
+        if ($releaseDate instanceof DateTimeImmutable && !$this->releaseAgePolicy->isEligible($row)) {
             $this->blockedReason = $this->ageBlockReason($this->pickerPackageName, $row->version, $releaseDate);
 
             return;
@@ -542,7 +542,7 @@ final class UpgradePrompt extends Prompt
                 continue;
             }
 
-            if ($this->releaseAgePolicy->isEligible($selection->target->releaseDate)) {
+            if ($this->releaseAgePolicy->isEligible($selection->target)) {
                 continue;
             }
 

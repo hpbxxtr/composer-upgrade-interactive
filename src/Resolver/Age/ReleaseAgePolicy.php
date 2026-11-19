@@ -6,9 +6,14 @@ namespace Hpbxxtr\UpgradeInteractive\Resolver\Age;
 
 use DateTimeImmutable;
 use Hpbxxtr\UpgradeInteractive\Core\Duration;
+use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 
 /**
  * Decides whether a candidate release is old enough to be selectable.
+ *
+ * Two gates apply: the plugin's minimum release age and, when Composer would block
+ * an update with it, Composer's policy.cooldown. The cooldown is a floor: lowering
+ * or disabling the min age never makes a version inside the cooldown selectable.
  *
  * Permissive by design: a release with no known date (path repositories, some
  * private VCS repositories, dev branches) is always eligible.
@@ -22,6 +27,7 @@ final readonly class ReleaseAgePolicy
     public function __construct(
         private ?Duration $duration = null,
         ?DateTimeImmutable $now = null,
+        private ?CooldownPolicy $cooldownPolicy = null,
     ) {
         $this->now = $now ?? new DateTimeImmutable('now');
     }
@@ -36,22 +42,43 @@ final readonly class ReleaseAgePolicy
         return $this->now;
     }
 
+    /**
+     * Whether any gate is active: a non-zero min age or a Composer cooldown.
+     */
     public function isEnabled(): bool
     {
-        return $this->duration instanceof Duration && !$this->duration->isZero();
+        return $this->isMinAgeEnabled() || $this->cooldownPolicy instanceof CooldownPolicy;
     }
 
-    public function isEligible(?DateTimeImmutable $releaseDate): bool
+    public function isEligible(VersionTarget $versionTarget): bool
     {
-        if (!$this->isEnabled()) {
-            return true;
-        }
+        return !$this->blockingGate($versionTarget) instanceof AgeGate;
+    }
+
+    /**
+     * The gate keeping the target from being selected, or null when it is eligible.
+     * When both block, the longer one wins (it releases the version later); on a tie
+     * the cooldown, since it cannot be lowered from the TUI.
+     */
+    public function blockingGate(VersionTarget $versionTarget): ?AgeGate
+    {
+        $releaseDate = $versionTarget->releaseDate;
 
         if (!$releaseDate instanceof DateTimeImmutable) {
-            return true;
+            return null;
         }
 
-        return $releaseDate <= $this->cutoff();
+        $minAgeSeconds   = $this->isMinAgeEnabled() && $this->duration instanceof Duration ? $this->duration->toSeconds() : null;
+        $cooldownSeconds = $versionTarget->isCooldownExempt ? null : $this->cooldownPolicy?->periodSeconds();
+
+        $isMinAgeBlocking   = $minAgeSeconds !== null && $this->isWithin($releaseDate, $minAgeSeconds);
+        $isCooldownBlocking = $cooldownSeconds !== null && $this->isWithin($releaseDate, $cooldownSeconds);
+
+        return match (true) {
+            $isCooldownBlocking && (!$isMinAgeBlocking || $cooldownSeconds >= $minAgeSeconds) => AgeGate::Cooldown,
+            $isMinAgeBlocking                                                                 => AgeGate::MinAge,
+            default                                                                           => null,
+        };
     }
 
     /**
@@ -69,7 +96,7 @@ final readonly class ReleaseAgePolicy
 
     public function withThreshold(?Duration $duration): self
     {
-        return new self($duration, $this->now);
+        return new self($duration, $this->now, $this->cooldownPolicy);
     }
 
     /**
@@ -77,8 +104,29 @@ final readonly class ReleaseAgePolicy
      */
     public function label(): string
     {
-        return $this->isEnabled() && $this->duration instanceof Duration
+        return $this->isMinAgeEnabled() && $this->duration instanceof Duration
             ? $this->duration->format()
             : 'off';
+    }
+
+    /**
+     * The Composer cooldown's label ('7d', '1d 12h'), or null when no cooldown applies.
+     */
+    public function cooldownLabel(): ?string
+    {
+        return $this->cooldownPolicy?->label();
+    }
+
+    private function isMinAgeEnabled(): bool
+    {
+        return $this->duration instanceof Duration && !$this->duration->isZero();
+    }
+
+    /**
+     * Whether the release is younger than the given span, i.e. still inside the gate.
+     */
+    private function isWithin(DateTimeImmutable $releaseDate, int $seconds): bool
+    {
+        return $releaseDate > $this->now->setTimestamp($this->now->getTimestamp() - $seconds);
     }
 }

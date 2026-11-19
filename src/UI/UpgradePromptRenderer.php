@@ -216,7 +216,7 @@ final class UpgradePromptRenderer extends Renderer
                     ? $selectedK->target
                     : $target;
                 $isCompatible  = $upgradePrompt->conflictMap->isCompatible($outdatedPackage->name, $displayed->versionRaw);
-                $isAgeBlocked  = !$upgradePrompt->releaseAgePolicy->isEligible($displayed->releaseDate);
+                $isAgeBlocked  = !$upgradePrompt->releaseAgePolicy->isEligible($displayed);
 
                 return $this->ansiFormatter->visPad(
                     $this->ansiFormatter->versionCell($isFocused, $isSelected, $isCompatible, $displayed->version, $bumpType, $isAgeBlocked),
@@ -294,7 +294,7 @@ final class UpgradePromptRenderer extends Renderer
                 $isCursor     = $cIdx === $upgradePrompt->pickerCol && $rowIdx === $upgradePrompt->pickerRow;
                 $suffix       = ($cIdx === $lastColIdx && $rowIdx === 0) ? $latestSuffix : '';
                 $isCompatible = $upgradePrompt->pickerVersionCompatibility[$version->versionRaw] ?? true;
-                $isAgeBlocked = !$upgradePrompt->releaseAgePolicy->isEligible($version->releaseDate);
+                $isAgeBlocked = !$upgradePrompt->releaseAgePolicy->isEligible($version);
 
                 $cells[] = $this->ansiFormatter->visPad(
                     $this->ansiFormatter->pickerRow($isCursor, $isCompatible, $version->version, $suffix, $isAgeBlocked),
@@ -325,7 +325,7 @@ final class UpgradePromptRenderer extends Renderer
             return null;
         }
 
-        $isBlocked = !$policy->isEligible($releaseDate);
+        $isBlocked = !$policy->isEligible($versionTarget);
         $text      = $releaseDate instanceof DateTimeImmutable
             ? 'released ' . RelativeTime::describe($releaseDate, $policy->now())
             : 'release date unknown';
