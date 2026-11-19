@@ -25,6 +25,7 @@ use Override;
 use RuntimeException;
 
 use function is_string;
+use function method_exists;
 use function Laravel\Prompts\spin;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
@@ -174,7 +175,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
      */
     private function resolveCooldown(InputInterface $input): ?CooldownPolicy
     {
-        if (!CooldownPolicy::isSupported()) {
+        // getBlockingCooldownPolicy() is @internal in Composer: check it too, so a future rename
+        // degrades to "no cooldown" instead of a fatal error on every run.
+        // @phpstan-ignore function.alreadyNarrowedType (always true against the dev dependency, not at runtime), symplify.forbiddenFuncCall (only way to feature-detect the Composer version)
+        if (!CooldownPolicy::isSupported() || !method_exists($this, 'getBlockingCooldownPolicy')) {
             return null; // @codeCoverageIgnore
         }
 
