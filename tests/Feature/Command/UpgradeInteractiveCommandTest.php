@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Composer\Console\Application as ComposerApplication;
 use Composer\IO\BufferIO;
 use Composer\IO\ConsoleIO;
+use Composer\Util\Platform;
 use Hpbxxtr\UpgradeInteractive\Command\UpgradeInteractiveCommand;
 use Hpbxxtr\UpgradeInteractive\Executor\ConstraintType;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
@@ -346,4 +347,40 @@ function makeInteractiveCommandTester(
     [$tester] = \makeCommandTester($mock);
 
     \expect($tester->execute(['--min-age' => '10']))->toBe(0);
+});
+
+// ---------------------------------------------------------------------------
+// Composer policy.cooldown
+// ---------------------------------------------------------------------------
+
+\describe('composer cooldown', function (): void {
+    \afterEach(function (): void {
+        Platform::clearEnv('COMPOSER_POLICY_COOLDOWN_PERIOD');
+    });
+
+    \it('exits 1 when the composer cooldown period is invalid', function (): void {
+        Platform::putEnv('COMPOSER_POLICY_COOLDOWN_PERIOD', 'soon');
+
+        $mock = \Mockery::mock(PackageResolverInterface::class);
+        $mock->shouldNotReceive('resolve');
+
+        [$tester, $io] = \makeCommandTester($mock);
+
+        \expect($tester->execute([]))->toBe(1)
+            ->and($io->getOutput())->toContain('Invalid value for COMPOSER_POLICY_COOLDOWN_PERIOD')
+        ;
+    });
+
+    \it('runs normally with a valid composer cooldown period', function (): void {
+        Platform::putEnv('COMPOSER_POLICY_COOLDOWN_PERIOD', '7 days');
+
+        $mock = \Mockery::mock(PackageResolverInterface::class);
+        $mock->shouldReceive('resolve')->once()->andReturn([]);
+
+        [$tester, $io] = \makeCommandTester($mock);
+
+        \expect($tester->execute([]))->toBe(0)
+            ->and($io->getOutput())->toContain('up to date')
+        ;
+    });
 });

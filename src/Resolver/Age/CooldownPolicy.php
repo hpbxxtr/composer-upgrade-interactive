@@ -8,6 +8,7 @@ use Composer\Package\PackageInterface;
 use Composer\Policy\CooldownPolicyConfig;
 
 use function array_slice;
+use function class_exists;
 use function implode;
 use function intdiv;
 
@@ -36,6 +37,15 @@ final readonly class CooldownPolicy
         private CooldownPolicyConfig $cooldownPolicyConfig,
         private int $periodSeconds,
     ) {}
+
+    /**
+     * Whether the running Composer knows policy.cooldown (2.11+); the plugin also runs on older 2.x.
+     */
+    public static function isSupported(): bool
+    {
+        // @phpstan-ignore symplify.forbiddenFuncCall (only way to feature-detect the Composer version), brnshkr.internalUsage (::class only names the class, nothing is called), brnshkr.internalUsage (reported twice for the same ::class fetch)
+        return class_exists(CooldownPolicyConfig::class);
+    }
 
     /**
      * @param CooldownPolicyConfig|null $cooldownPolicyConfig the policy Composer would block an update with, or null when none applies

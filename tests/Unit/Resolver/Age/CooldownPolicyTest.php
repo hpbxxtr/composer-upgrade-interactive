@@ -72,3 +72,7 @@ use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
         ->and($policy?->isExempt(new CompletePackage('vendor/pkg', '2.0.0.0', '2.0.0')))->toBeFalse()
     ;
 });
+
+\it('reports cooldown support on Composer 2.11+', function (): void {
+    \expect(CooldownPolicy::isSupported())->toBeTrue();
+});

@@ -12,6 +12,7 @@ use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutor;
 use Hpbxxtr\UpgradeInteractive\Executor\UpgradeExecutorInterface;
 use Hpbxxtr\UpgradeInteractive\Core\Duration;
 use Hpbxxtr\UpgradeInteractive\Resolver\Age\AgeThresholdResolver;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\Age\ReleaseAgePolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\Compatibility\CompatibilityChecker;
@@ -21,6 +22,7 @@ use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolverInterface;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUI;
 use Hpbxxtr\UpgradeInteractive\UI\InteractiveUIInterface;
 use Override;
+use RuntimeException;
 
 use function is_string;
 use function Laravel\Prompts\spin;
@@ -67,9 +69,10 @@ final class UpgradeInteractiveCommand extends BaseCommand
         $io = $this->getIO();
 
         try {
-            $releaseAgePolicy = new ReleaseAgePolicy($this->resolveAgeThreshold($input));
-        } catch (InvalidArgumentException $invalidArgumentException) {
-            $io->writeError('<error>' . $invalidArgumentException->getMessage() . '</error>');
+            $cooldownPolicy   = $this->resolveCooldown($input);
+            $releaseAgePolicy = new ReleaseAgePolicy($this->resolveAgeThreshold($input), cooldownPolicy: $cooldownPolicy);
+        } catch (InvalidArgumentException|RuntimeException $exception) {
+            $io->writeError('<error>' . $exception->getMessage() . '</error>');
 
             return 1;
         }
@@ -87,8 +90,8 @@ final class UpgradeInteractiveCommand extends BaseCommand
                 $composer = $this->requireComposer();
 
                 /** @var list<\Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage> $entries */
-                $entries = spin(function () use ($composer, &$checker, &$initialConflictMap): array {
-                    $resolved = (new PackageResolver($composer))->resolve();
+                $entries = spin(function () use ($composer, $cooldownPolicy, &$checker, &$initialConflictMap): array {
+                    $resolved = (new PackageResolver($composer, cooldownPolicy: $cooldownPolicy))->resolve();
 
                     if ($resolved !== []) {
                         $installedVersions  = self::collectInstalledVersions($composer);
@@ -118,7 +121,7 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         $ui = $this->interactiveUI ?? new InteractiveUI(
-            availableVersionsResolver: isset($composer) ? new AvailableVersionsResolver($composer) : null,
+            availableVersionsResolver: isset($composer) ? new AvailableVersionsResolver($composer, cooldownPolicy: $cooldownPolicy) : null,
             compatibilityChecker: $checker,
             initialConflictMap: $initialConflictMap,
             releaseAgePolicy: $releaseAgePolicy,
@@ -161,6 +164,28 @@ final class UpgradeInteractiveCommand extends BaseCommand
         }
 
         return AgeThresholdResolver::resolve(null, $this->tryComposer()?->getPackage()->getExtra() ?? []);
+    }
+
+    /**
+     * Composer's policy.cooldown, but only when Composer would actually block an update
+     * with it (honours COMPOSER_POLICY_COOLDOWN_* and COMPOSER_NO_BLOCKING).
+     *
+     * @throws RuntimeException on a malformed cooldown period in config or environment
+     */
+    private function resolveCooldown(InputInterface $input): ?CooldownPolicy
+    {
+        if (!CooldownPolicy::isSupported()) {
+            return null; // @codeCoverageIgnore
+        }
+
+        $composer = $this->tryComposer();
+
+        if (!$composer instanceof Composer) {
+            return null;
+        }
+
+        // @phpstan-ignore brnshkr.internalUsage (Composer's own resolution of policy.cooldown incl. env overrides; no public API exists)
+        return CooldownPolicy::fromComposerConfig($this->getBlockingCooldownPolicy($composer->getConfig(), $input));
     }
 
     /**
