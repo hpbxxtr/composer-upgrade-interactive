@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 
 \it('strips leading v from display version', function (): void {
@@ -47,4 +48,38 @@ use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
     $package = new Composer\Package\CompletePackage('vendor/pkg', '1.2.3.0', '1.2.3');
 
     \expect(VersionTarget::fromPackage($package)->releaseDate)->toBeNull();
+});
+
+\it('prefers the published date over the release date', function (): void {
+    $package = new Composer\Package\CompletePackage('vendor/pkg', '1.2.3.0', '1.2.3');
+    $package->setReleaseDate(new DateTime('2026-07-01 08:00:00'));
+    $package->setPublishedDate(new DateTimeImmutable('2026-07-10 09:00:00'));
+
+    \expect(VersionTarget::fromPackage($package)->releaseDate?->format('Y-m-d H:i:s'))->toBe('2026-07-10 09:00:00');
+});
+
+\it('falls back to the release date without a published date', function (): void {
+    $package = new Composer\Package\CompletePackage('vendor/pkg', '1.2.3.0', '1.2.3');
+    $package->setReleaseDate(new DateTime('2026-07-01 08:00:00'));
+
+    \expect(VersionTarget::fromPackage($package)->releaseDate?->format('Y-m-d H:i:s'))->toBe('2026-07-01 08:00:00');
+});
+
+\it('is not cooldown exempt by default', function (): void {
+    \expect(VersionTarget::fromRaw('1.2.3')->isCooldownExempt)->toBeFalse();
+});
+
+\it('keeps a cooldown exemption passed to fromRaw', function (): void {
+    \expect(VersionTarget::fromRaw('1.2.3', null, true)->isCooldownExempt)->toBeTrue();
+});
+
+\it('takes the cooldown exemption from the policy', function (): void {
+    $cooldownPolicy = CooldownPolicy::fromComposerConfig(\cooldownConfig(86400));
+
+    $devPackage    = new Composer\Package\CompletePackage('vendor/pkg', 'dev-main', 'dev-main');
+    $stablePackage = new Composer\Package\CompletePackage('vendor/pkg', '1.2.3.0', '1.2.3');
+
+    \expect(VersionTarget::fromPackage($devPackage, $cooldownPolicy)->isCooldownExempt)->toBeTrue()
+        ->and(VersionTarget::fromPackage($stablePackage, $cooldownPolicy)->isCooldownExempt)->toBeFalse()
+    ;
 });
