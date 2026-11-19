@@ -2,6 +2,9 @@
 
 declare(strict_types=1);
 
+use Composer\Policy\CooldownPolicyConfig;
+use Composer\Policy\IgnorePackageRule;
+use Composer\Policy\ListPolicyConfig;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
 
@@ -47,4 +50,14 @@ function outdatedPackageWithMinor(
         minor: VersionTarget::fromRaw($minorTarget),
         isDev: $isDev,
     );
+}
+
+/**
+ * Composer's blocking cooldown policy config, as BaseCommand::getBlockingCooldownPolicy() returns it.
+ *
+ * @param array<mixed> $ignore policy.cooldown.ignore map
+ */
+function cooldownConfig(?int $period, array $ignore = []): CooldownPolicyConfig
+{
+    return new CooldownPolicyConfig(true, ListPolicyConfig::AUDIT_IGNORE, IgnorePackageRule::parseIgnoreMap($ignore), $period);
 }
