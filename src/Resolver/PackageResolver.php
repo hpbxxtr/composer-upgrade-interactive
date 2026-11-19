@@ -14,6 +14,7 @@ use Composer\Repository\CompositeRepository;
 use Composer\Repository\PlatformRepository;
 use Composer\Repository\RepositorySet;
 use Hpbxxtr\UpgradeInteractive\Core\Str;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Override;
 use RuntimeException;
 
@@ -34,11 +35,13 @@ final readonly class PackageResolver implements PackageResolverInterface
     /**
      * @param RepositorySet|null    $repositorySet  Injected for testing; built from Composer in production.
      * @param PlatformRepository|null $platformRepository Injected for testing; built from config in production.
+     * @param CooldownPolicy|null     $cooldownPolicy     Composer's blocking cooldown; stamps per-version exemptions on targets.
      */
     public function __construct(
         private Composer $composer,
         private ?RepositorySet $repositorySet = null,
         private ?PlatformRepository $platformRepository = null,
+        private ?CooldownPolicy $cooldownPolicy = null,
     ) {}
 
     /**
@@ -128,7 +131,7 @@ final readonly class PackageResolver implements PackageResolverInterface
         if (Str::startsWith($version, 'dev-')) {
             $candidate = $versionSelector->findBestCandidate($package->getName(), $version, $bestStability);
             $target    = ($candidate !== false && $candidate->getVersion() !== $version)
-                ? VersionTarget::fromPackage($candidate) // @codeCoverageIgnore
+                ? VersionTarget::fromPackage($candidate, $this->cooldownPolicy) // @codeCoverageIgnore
                 : null;
 
             return [null, $target, null];
@@ -164,7 +167,7 @@ final readonly class PackageResolver implements PackageResolverInterface
             return null;
         }
 
-        return VersionTarget::fromPackage($candidate);
+        return VersionTarget::fromPackage($candidate, $this->cooldownPolicy);
     }
 
     /**

@@ -12,6 +12,7 @@ use Composer\Repository\ArrayRepository;
 use Composer\Repository\InstalledRepositoryInterface;
 use Composer\Repository\RepositoryManager;
 use Composer\Repository\RepositorySet;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\OutdatedPackage;
 use Hpbxxtr\UpgradeInteractive\Resolver\PackageResolver;
 
@@ -589,4 +590,28 @@ function mockComposerWithInstalled(array $installedPackages, array $devPackageNa
     ))->resolve();
 
     \expect($packages[0]->minor?->releaseDate?->format('Y-m-d'))->toBe('2026-08-19');
+});
+
+// ---------------------------------------------------------------------------
+// Composer cooldown exemption
+// ---------------------------------------------------------------------------
+
+\it('marks targets exempt when a cooldown ignore rule matches', function (): void {
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([\makeInstalledPackage('vendor/pkg', '1.0.0')]),
+        \makeVersionSet([\makeInstalledPackage('vendor/pkg', '1.1.0')]),
+        cooldownPolicy: CooldownPolicy::fromComposerConfig(\cooldownConfig(604800, ['vendor/pkg' => null])),
+    ))->resolve();
+
+    \expect($packages[0]->minor?->isCooldownExempt)->toBeTrue();
+});
+
+\it('leaves targets non-exempt without a matching ignore rule', function (): void {
+    $packages = (new PackageResolver(
+        \mockComposerWithInstalled([\makeInstalledPackage('vendor/pkg', '1.0.0')]),
+        \makeVersionSet([\makeInstalledPackage('vendor/pkg', '1.1.0')]),
+        cooldownPolicy: CooldownPolicy::fromComposerConfig(\cooldownConfig(604800, ['vendor/other' => null])),
+    ))->resolve();
+
+    \expect($packages[0]->minor?->isCooldownExempt)->toBeFalse();
 });

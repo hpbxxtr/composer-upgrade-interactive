@@ -8,6 +8,7 @@ use Composer\Package\Version\VersionParser;
 use Composer\Repository\ArrayRepository;
 use Composer\Repository\RepositoryManager;
 use Composer\Repository\RepositorySet;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Hpbxxtr\UpgradeInteractive\Resolver\AvailableVersionsResolver;
 use Hpbxxtr\UpgradeInteractive\Resolver\BumpType;
 use Hpbxxtr\UpgradeInteractive\Resolver\VersionTarget;
@@ -319,4 +320,20 @@ function makeAvailRepoSet(array $packages): RepositorySet
     );
 
     \expect($resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor)[0]->releaseDate)->toBeNull();
+});
+
+// ---------------------------------------------------------------------------
+// Composer cooldown exemption
+// ---------------------------------------------------------------------------
+
+\it('flags cooldown exemption per version', function (): void {
+    $resolver = new AvailableVersionsResolver(
+        \Mockery::mock(Composer::class),
+        \makeAvailRepoSet([\makeAvailPackage('vendor/pkg', '1.1.0'), \makeAvailPackage('vendor/pkg', '2.0.0')]),
+        cooldownPolicy: CooldownPolicy::fromComposerConfig(\cooldownConfig(604800, ['vendor/pkg' => ['constraint' => '^1.0']])),
+    );
+
+    \expect($resolver->resolve('vendor/pkg', '1.0.0', BumpType::Minor)[0]->isCooldownExempt)->toBeTrue()
+        ->and($resolver->resolve('vendor/pkg', '1.0.0', BumpType::Major)[0]->isCooldownExempt)->toBeFalse()
+    ;
 });

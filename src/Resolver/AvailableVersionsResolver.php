@@ -9,6 +9,7 @@ use Composer\Repository\CompositeRepository;
 use Composer\Repository\RepositorySet;
 use Composer\Semver\Semver;
 use Composer\Semver\VersionParser;
+use Hpbxxtr\UpgradeInteractive\Resolver\Age\CooldownPolicy;
 use Override;
 use UnexpectedValueException;
 
@@ -21,11 +22,13 @@ use function explode;
 final readonly class AvailableVersionsResolver implements AvailableVersionsResolverInterface
 {
     /**
-     * @param RepositorySet|null $repositorySet Injected for testing; built from Composer in production.
+     * @param RepositorySet|null  $repositorySet  Injected for testing; built from Composer in production.
+     * @param CooldownPolicy|null $cooldownPolicy Composer's blocking cooldown; stamps per-version exemptions on targets.
      */
     public function __construct(
         private Composer $composer,
         private ?RepositorySet $repositorySet = null,
+        private ?CooldownPolicy $cooldownPolicy = null,
     ) {}
 
     /**
@@ -46,6 +49,7 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
         $seen         = [];
         $rawVersions  = [];
         $releaseDates = [];
+        $exemptions   = [];
 
         foreach ($repoSet->findPackages($packageName) as $basePackage) {
             $rawVersion = $basePackage->getPrettyVersion();
@@ -72,12 +76,14 @@ final readonly class AvailableVersionsResolver implements AvailableVersionsResol
 
             $rawVersions[]              = $rawVersion;
             $releaseDates[$rawVersion]  = VersionTarget::releaseDateOf($basePackage);
+            $exemptions[$rawVersion]    = $this->cooldownPolicy?->isExempt($basePackage) ?? false;
         }
 
         return array_map(
             static fn (string $rawVersion): VersionTarget => VersionTarget::fromRaw(
                 $rawVersion,
                 $releaseDates[$rawVersion] ?? null,
+                $exemptions[$rawVersion] ?? false,
             ),
             Semver::rsort($rawVersions),
         );
